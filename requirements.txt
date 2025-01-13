@@ -5,3 +5,4 @@ Flask-CORS
 PyJWT
 requests
 gunicorn
+psycopg2-binary
