@@ -25,6 +25,7 @@ bcrypt = Bcrypt(app)
 class Usuario(db.Model):
     __tablename__ = 'usuarios'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    nome = db.Column(db.String(100), nullable=False)
     cpf = db.Column(db.String(11), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     numero_celular = db.Column(db.String(20), nullable=False)
@@ -90,12 +91,13 @@ def verificar_limite_diario(usuario):
 @app.route('/cadastro', methods=['POST'])
 def cadastro():
     data = request.json
+    nome = data.get('nome')
     cpf = data.get('cpf')
     email = data.get('email')
     numero_celular = data.get('numero_celular')
     senha = data.get('senha')
 
-    if not all([cpf, email, numero_celular, senha]):
+    if not all([nome, cpf, email, numero_celular, senha]):
         return jsonify({'message': 'Dados incompletos no cadastro.'}), 400
 
     if Usuario.query.filter_by(cpf=cpf).first():
@@ -106,6 +108,7 @@ def cadastro():
     senha_hash = bcrypt.generate_password_hash(senha).decode('utf-8')
 
     novo_usuario = Usuario(
+        nome=nome,
         cpf=cpf,
         email=email,
         numero_celular=numero_celular,
@@ -169,6 +172,7 @@ def consulta(current_user):
 @token_requerido
 def get_usuario(current_user):
     return jsonify({
+        'nome': current_user.nome,
         'cpf': current_user.cpf,
         'email': current_user.email,
         'numero_celular': current_user.numero_celular,
