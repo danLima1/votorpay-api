@@ -6,6 +6,8 @@ import jwt
 import datetime
 from functools import wraps
 import requests
+import random
+import string
 
 app = Flask(__name__)
 CORS(app)  # Habilita CORS para todas as rotas e origens
@@ -30,6 +32,8 @@ class Usuario(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     numero_celular = db.Column(db.String(20), nullable=False)
     senha = db.Column(db.String(128), nullable=False)
+    codigo_indicacao = db.Column(db.String(10), unique=True)
+    indicado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
 
     consultas_hoje = db.Column(db.Integer, default=0)
     data_ultima_consulta = db.Column(db.Date, default=datetime.date.today())
@@ -96,6 +100,7 @@ def cadastro():
     email = data.get('email')
     numero_celular = data.get('numero_celular')
     senha = data.get('senha')
+    codigo_indicacao_usado = data.get('codigo_indicacao')  # Opcional
 
     if not all([nome, cpf, email, numero_celular, senha]):
         return jsonify({'message': 'Dados incompletos no cadastro.'}), 400
@@ -105,16 +110,37 @@ def cadastro():
     if Usuario.query.filter_by(email=email).first():
         return jsonify({'message': 'E-mail já cadastrado.'}), 400
 
+    # Verificar código de indicação se fornecido
+    indicador = None
+    if codigo_indicacao_usado:
+        indicador = Usuario.query.filter_by(codigo_indicacao=codigo_indicacao_usado).first()
+        if not indicador:
+            return jsonify({'message': 'Código de indicação inválido.'}), 400
+
     senha_hash = bcrypt.generate_password_hash(senha).decode('utf-8')
+
+    # Gerar código de indicação único
+    while True:
+        novo_codigo = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        if not Usuario.query.filter_by(codigo_indicacao=novo_codigo).first():
+            break
 
     novo_usuario = Usuario(
         nome=nome,
         cpf=cpf,
         email=email,
         numero_celular=numero_celular,
-        senha=senha_hash
+        senha=senha_hash,
+        codigo_indicacao=novo_codigo,
+        indicado_por=indicador.id if indicador else None
     )
+
     db.session.add(novo_usuario)
+    
+    # Adicionar R$ 5,00 ao saldo do indicador
+    if indicador:
+        indicador.saldo += 5.0
+    
     db.session.commit()
 
     return jsonify({'message': 'Usuário cadastrado com sucesso!'}), 201
@@ -172,13 +198,15 @@ def consulta(current_user):
 @token_requerido
 def get_usuario(current_user):
     return jsonify({
+        'id': current_user.id,
         'nome': current_user.nome,
         'cpf': current_user.cpf,
         'email': current_user.email,
         'numero_celular': current_user.numero_celular,
         'consultas_hoje': current_user.consultas_hoje,
         'consultas_totais': current_user.consultas_totais,
-        'saldo': current_user.saldo
+        'saldo': current_user.saldo,
+        'codigo_indicacao': current_user.codigo_indicacao
     }), 200
 
 @app.route('/consulta/<placa>', methods=['GET'])
@@ -206,7 +234,6 @@ def consultar_placa(current_user, placa):
 # Iniciar a aplicação
 # -----------------------------------------------------------------------------
 if __name__ == '__main__':
-    # Envolver db.create_all() em um application context.
     with app.app_context():
         db.create_all()
     app.run(debug=True)
