@@ -34,6 +34,8 @@ class Usuario(db.Model):
     senha = db.Column(db.String(128), nullable=False)
     codigo_indicacao = db.Column(db.String(10), unique=True)
     indicado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    total_indicacoes = db.Column(db.Integer, default=0)
+    usuarios_indicados = db.relationship('Usuario', backref=db.backref('indicador', remote_side=[id]), lazy='dynamic')
 
     consultas_hoje = db.Column(db.Integer, default=0)
     data_ultima_consulta = db.Column(db.Date, default=datetime.date.today())
@@ -116,6 +118,7 @@ def cadastro():
         indicador = Usuario.query.filter_by(codigo_indicacao=codigo_indicacao_usado).first()
         if not indicador:
             return jsonify({'message': 'Código de indicação inválido.'}), 400
+        indicador.total_indicacoes += 1
 
     senha_hash = bcrypt.generate_password_hash(senha).decode('utf-8')
 
@@ -197,6 +200,12 @@ def consulta(current_user):
 @app.route('/usuario', methods=['GET'])
 @token_requerido
 def get_usuario(current_user):
+    usuarios_indicados = [{
+        'id': u.id,
+        'nome': u.nome,
+        'data_cadastro': u.data_cadastro.strftime('%d/%m/%Y') if hasattr(u, 'data_cadastro') else None
+    } for u in current_user.usuarios_indicados.all()]
+
     return jsonify({
         'id': current_user.id,
         'nome': current_user.nome,
@@ -206,7 +215,9 @@ def get_usuario(current_user):
         'consultas_hoje': current_user.consultas_hoje,
         'consultas_totais': current_user.consultas_totais,
         'saldo': current_user.saldo,
-        'codigo_indicacao': current_user.codigo_indicacao
+        'codigo_indicacao': current_user.codigo_indicacao,
+        'total_indicacoes': current_user.total_indicacoes,
+        'usuarios_indicados': usuarios_indicados
     }), 200
 
 @app.route('/consulta/<placa>', methods=['GET'])
