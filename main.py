@@ -8,6 +8,9 @@ from functools import wraps
 import requests
 import random
 import string
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 app = Flask(__name__)
 CORS(app)  # Habilita CORS para todas as rotas e origens
@@ -17,6 +20,12 @@ CORS(app)  # Habilita CORS para todas as rotas e origens
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:POqEhF0Uz8N1IPQk@maliciously-upward-kelpie.data-1.use1.tembo.io:5432/postgres'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'fa0b66aedea910162f3bdb38c72817923e3807a53090d4683d50e00337ea86c4'
+
+# Configurações do SMTP
+SMTP_SERVER = "smtp.mailgun.org"
+SMTP_PORT = 587
+SMTP_USERNAME = "teste42@typebot.searchapi.shop"  # Substitua pelo seu email
+SMTP_PASSWORD = "Daniel30055@"  # Substitua pela sua senha de app do Gmail
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
@@ -36,6 +45,8 @@ class Usuario(db.Model):
     indicado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     total_indicacoes = db.Column(db.Integer, default=0)
     usuarios_indicados = db.relationship('Usuario', backref=db.backref('indicador', remote_side=[id]), lazy='dynamic')
+    reset_token = db.Column(db.String(100), unique=True, nullable=True)
+    reset_token_expiracao = db.Column(db.DateTime, nullable=True)
 
     consultas_hoje = db.Column(db.Integer, default=0)
     data_ultima_consulta = db.Column(db.Date, default=datetime.date.today())
@@ -89,6 +100,38 @@ def verificar_limite_diario(usuario):
     if usuario.consultas_hoje < 10:
         return True
     else:
+        return False
+
+def enviar_email_reset_senha(email, token):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USERNAME
+        msg['To'] = email
+        msg['Subject'] = "Recuperação de Senha - VotorPay"
+
+        link = f"https://seu-dominio.com/reset-senha?token={token}"
+        corpo = f"""
+        <html>
+            <body>
+                <h2>Recuperação de Senha - VotorPay</h2>
+                <p>Você solicitou a recuperação de senha. Clique no link abaixo para redefinir sua senha:</p>
+                <p><a href="{link}">Clique aqui para redefinir sua senha</a></p>
+                <p>Se você não solicitou esta recuperação, ignore este email.</p>
+                <p>O link expira em 1 hora.</p>
+            </body>
+        </html>
+        """
+
+        msg.attach(MIMEText(corpo, 'html'))
+
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Erro ao enviar email: {str(e)}")
         return False
 
 # -----------------------------------------------------------------------------
@@ -240,6 +283,64 @@ def consultar_placa(current_user, placa):
     except Exception as e:
         print(f"Erro na consulta: {str(e)}")
         return jsonify({'message': 'Erro ao consultar placa'}), 500
+
+@app.route('/esqueci-senha', methods=['POST'])
+def esqueci_senha():
+    data = request.json
+    email = data.get('email')
+
+    if not email:
+        return jsonify({'message': 'Email é obrigatório.'}), 400
+
+    usuario = Usuario.query.filter_by(email=email).first()
+    if not usuario:
+        return jsonify({'message': 'Email não encontrado.'}), 404
+
+    # Gerar token único
+    token = ''.join(random.choices(string.ascii_letters + string.digits, k=50))
+    
+    # Salvar token e data de expiração
+    usuario.reset_token = token
+    usuario.reset_token_expiracao = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+    
+    try:
+        db.session.commit()
+        if enviar_email_reset_senha(email, token):
+            return jsonify({'message': 'Email de recuperação enviado com sucesso.'}), 200
+        else:
+            return jsonify({'message': 'Erro ao enviar email de recuperação.'}), 500
+    except:
+        db.session.rollback()
+        return jsonify({'message': 'Erro ao processar solicitação.'}), 500
+
+@app.route('/reset-senha', methods=['POST'])
+def reset_senha():
+    data = request.json
+    token = data.get('token')
+    nova_senha = data.get('nova_senha')
+
+    if not all([token, nova_senha]):
+        return jsonify({'message': 'Token e nova senha são obrigatórios.'}), 400
+
+    usuario = Usuario.query.filter_by(reset_token=token).first()
+    if not usuario:
+        return jsonify({'message': 'Token inválido.'}), 400
+
+    # Verificar se o token expirou
+    if not usuario.reset_token_expiracao or usuario.reset_token_expiracao < datetime.datetime.now(datetime.UTC):
+        return jsonify({'message': 'Token expirado.'}), 400
+
+    # Atualizar senha
+    usuario.senha = bcrypt.generate_password_hash(nova_senha).decode('utf-8')
+    usuario.reset_token = None
+    usuario.reset_token_expiracao = None
+
+    try:
+        db.session.commit()
+        return jsonify({'message': 'Senha atualizada com sucesso.'}), 200
+    except:
+        db.session.rollback()
+        return jsonify({'message': 'Erro ao atualizar senha.'}), 500
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
