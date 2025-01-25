@@ -327,7 +327,8 @@ def reset_senha():
         return jsonify({'message': 'Token inválido.'}), 400
 
     # Verificar se o token expirou
-    if not usuario.reset_token_expiracao or usuario.reset_token_expiracao < datetime.datetime.now(datetime.UTC):
+    agora = datetime.datetime.now(datetime.UTC)
+    if not usuario.reset_token_expiracao or usuario.reset_token_expiracao.replace(tzinfo=datetime.UTC) < agora:
         return jsonify({'message': 'Token expirado.'}), 400
 
     # Atualizar senha
