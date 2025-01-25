@@ -109,7 +109,7 @@ def enviar_email_reset_senha(email, token):
         msg['To'] = email
         msg['Subject'] = "Recuperação de Senha - VotorPay"
 
-        link = f"https://seu-dominio.com/reset-senha?token={token}"
+        link = f"https://votopayad.vercel.app/auth.html?token={token}"
         corpo = f"""
         <html>
             <body>
