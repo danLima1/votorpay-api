@@ -92,11 +92,17 @@ def gerar_token(usuario):
     return token
 
 def verificar_limite_diario(usuario):
-    hoje = datetime.date.today()
-    if usuario.data_ultima_consulta != hoje:
+    # Obter data atual no fuso horário de Brasília
+    fuso_horario = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 (Brasília)
+    hoje = datetime.datetime.now(fuso_horario).date()
+    
+    # Se a data da última consulta for None ou diferente de hoje, reinicia o contador
+    if usuario.data_ultima_consulta is None or usuario.data_ultima_consulta != hoje:
         usuario.data_ultima_consulta = hoje
         usuario.consultas_hoje = 0
+        db.session.commit()
 
+    # Verifica se ainda tem consultas disponíveis
     if usuario.consultas_hoje < 10:
         return True
     else:
