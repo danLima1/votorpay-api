@@ -47,6 +47,7 @@ class Usuario(db.Model):
     usuarios_indicados = db.relationship('Usuario', backref=db.backref('indicador', remote_side=[id]), lazy='dynamic')
     reset_token = db.Column(db.String(100), unique=True, nullable=True)
     reset_token_expiracao = db.Column(db.DateTime, nullable=True)
+    role = db.Column(db.String(20), default='sem_vip')  # Novo campo para controle de VIP
 
     consultas_hoje = db.Column(db.Integer, default=0)
     data_ultima_consulta = db.Column(db.Date, default=datetime.date.today())
@@ -269,7 +270,8 @@ def get_usuario(current_user):
         'codigo_indicacao': current_user.codigo_indicacao,
         'total_indicacoes': current_user.total_indicacoes,
         'usuarios_indicados': usuarios_indicados,
-        'ganhos_hoje': current_user.ganhos_hoje
+        'ganhos_hoje': current_user.ganhos_hoje,
+        'role': current_user.role
     }), 200
 
 @app.route('/consulta/<placa>', methods=['GET'])
@@ -351,6 +353,43 @@ def reset_senha():
     except:
         db.session.rollback()
         return jsonify({'message': 'Erro ao atualizar senha.'}), 500
+
+@app.route('/atualizar-vip', methods=['POST'])
+@token_requerido
+def atualizar_vip(current_user):
+    data = request.json
+    transaction_id = data.get('transaction_id')
+    vip_type = data.get('vip_type')
+    
+    if not all([transaction_id, vip_type]):
+        return jsonify({'message': 'Dados incompletos.'}), 400
+    
+    # Verificar status da transação na BlackPay
+    try:
+        response = requests.get(
+            f'https://api.blackpay.io/v1/pix/receive/{transaction_id}',
+            headers={'Authorization': 'Bearer seu_token_blackpay'}
+        )
+        
+        payment_data = response.json()
+        
+        if payment_data.get('status') == 'paid':
+            # Atualizar role do usuário baseado no tipo de VIP
+            if vip_type in ['vip1', 'vip2', 'vip3']:
+                current_user.role = vip_type
+                db.session.commit()
+                return jsonify({
+                    'message': 'VIP atualizado com sucesso!',
+                    'new_role': vip_type
+                }), 200
+            else:
+                return jsonify({'message': 'Tipo de VIP inválido.'}), 400
+        else:
+            return jsonify({'message': 'Pagamento ainda não confirmado.'}), 402
+            
+    except Exception as e:
+        print(f"Erro ao verificar pagamento: {str(e)}")
+        return jsonify({'message': 'Erro ao verificar pagamento.'}), 500
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
