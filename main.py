@@ -192,7 +192,7 @@ def cadastro():
     
     # Adicionar R$ 5,00 ao saldo do indicador
     if indicador:
-        indicador.saldo += 5.0
+        indicador.saldo += 25.0
     
     db.session.commit()
 
