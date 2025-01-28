@@ -52,6 +52,7 @@ class Usuario(db.Model):
     data_ultima_consulta = db.Column(db.Date, default=datetime.date.today())
     consultas_totais = db.Column(db.Integer, default=0)
     saldo = db.Column(db.Float, default=0.0)
+    ganhos_hoje = db.Column(db.Float, default=0)
 
 # -----------------------------------------------------------------------------
 # Funções auxiliares
@@ -92,17 +93,14 @@ def gerar_token(usuario):
     return token
 
 def verificar_limite_diario(usuario):
-    # Obter data atual no fuso horário de Brasília
-    fuso_horario = datetime.timezone(datetime.timedelta(hours=-3))  # UTC-3 (Brasília)
-    hoje = datetime.datetime.now(fuso_horario).date()
+    hoje = datetime.date.today()
     
-    # Se a data da última consulta for None ou diferente de hoje, reinicia o contador
-    if usuario.data_ultima_consulta is None or usuario.data_ultima_consulta != hoje:
+    if usuario.data_ultima_consulta != hoje:
         usuario.data_ultima_consulta = hoje
         usuario.consultas_hoje = 0
+        usuario.ganhos_hoje = 0
         db.session.commit()
 
-    # Verifica se ainda tem consultas disponíveis
     if usuario.consultas_hoje < 10:
         return True
     else:
@@ -233,6 +231,7 @@ def consulta(current_user):
 
     if consulta_sucedida:
         current_user.saldo += 1.0
+        current_user.ganhos_hoje += 1.0
         msg = 'Consulta realizada com sucesso. Saldo incrementado em R$1.'
     else:
         msg = 'Consulta não sucedida. Nenhum valor adicionado ao saldo.'
@@ -243,7 +242,8 @@ def consulta(current_user):
         'message': msg,
         'consultas_hoje': current_user.consultas_hoje,
         'consultas_totais': current_user.consultas_totais,
-        'saldo': current_user.saldo
+        'saldo': current_user.saldo,
+        'ganhos_hoje': current_user.ganhos_hoje
     }), 200
 
 @app.route('/usuario', methods=['GET'])
