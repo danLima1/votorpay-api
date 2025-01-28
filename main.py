@@ -93,7 +93,9 @@ def gerar_token(usuario):
     return token
 
 def verificar_limite_diario(usuario):
-    hoje = datetime.date.today()
+    # Obtém a data atual no timezone de Brasília
+    tz_br = datetime.timezone(datetime.timedelta(hours=-3))
+    hoje = datetime.datetime.now(tz_br).date()
     
     if usuario.data_ultima_consulta != hoje:
         usuario.data_ultima_consulta = hoje
@@ -266,7 +268,8 @@ def get_usuario(current_user):
         'saldo': current_user.saldo,
         'codigo_indicacao': current_user.codigo_indicacao,
         'total_indicacoes': current_user.total_indicacoes,
-        'usuarios_indicados': usuarios_indicados
+        'usuarios_indicados': usuarios_indicados,
+        'ganhos_hoje': current_user.ganhos_hoje
     }), 200
 
 @app.route('/consulta/<placa>', methods=['GET'])
