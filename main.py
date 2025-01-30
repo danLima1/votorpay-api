@@ -280,6 +280,7 @@ def login():
         return jsonify({'message': 'Erro ao realizar login'}), 500
 
 @app.route('/consulta', methods=['POST'])
+@token_requerido
 def consulta(current_user):
     data = request.json
     consulta_sucedida = data.get('consulta_sucedida', False)
