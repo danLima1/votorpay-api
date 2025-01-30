@@ -116,34 +116,50 @@ def gerar_token(usuario):
     return token
 
 def verificar_limite_diario(usuario):
-    # Obtém a data atual no timezone de Brasília
-    tz_br = datetime.timezone(datetime.timedelta(hours=-3))
-    hoje = datetime.datetime.now(tz_br).date()
-    
-    if usuario.data_ultima_consulta != hoje:
-        usuario.data_ultima_consulta = hoje
-        usuario.consultas_hoje = 0
-        usuario.ganhos_hoje = 0
-        db.session.commit()
+    try:
+        # Obtém a data atual no timezone de Brasília
+        tz_br = datetime.timezone(datetime.timedelta(hours=-3))
+        hoje = datetime.datetime.now(tz_br).date()
+        
+        # Garantir que data_ultima_consulta seja um objeto date
+        ultima_consulta = usuario.data_ultima_consulta
+        if isinstance(ultima_consulta, datetime.datetime):
+            ultima_consulta = ultima_consulta.date()
+        
+        if ultima_consulta != hoje:
+            usuario.data_ultima_consulta = hoje
+            usuario.consultas_hoje = 0
+            usuario.ganhos_hoje = 0
+            db.session.commit()
 
-    # Verificar se o VIP expirou
-    agora = datetime.datetime.now(datetime.UTC)
-    if usuario.role != 'sem_vip' and usuario.data_expiracao_vip and usuario.data_expiracao_vip < agora:
-        usuario.role = 'sem_vip'
-        usuario.data_expiracao_vip = None
-        db.session.commit()
-        print(f"VIP expirado: Usuário {usuario.nome} (CPF: {usuario.cpf})")
+        # Verificar se o VIP expirou
+        agora = datetime.datetime.now(datetime.UTC)
+        if usuario.role != 'sem_vip' and usuario.data_expiracao_vip:
+            # Garantir que a data de expiração tenha timezone
+            data_expiracao = usuario.data_expiracao_vip
+            if data_expiracao.tzinfo is None:
+                data_expiracao = data_expiracao.replace(tzinfo=datetime.UTC)
+            
+            if data_expiracao < agora:
+                usuario.role = 'sem_vip'
+                usuario.data_expiracao_vip = None
+                db.session.commit()
+                print(f"VIP expirado: Usuário {usuario.nome} (CPF: {usuario.cpf})")
 
-    # Definir limite baseado no VIP
-    limites_diarios = {
-        'sem_vip': 10,
-        'vip1': 30,
-        'vip2': 50,
-        'vip3': 100
-    }
-    limite = limites_diarios.get(usuario.role, 10)
+        # Definir limite baseado no VIP
+        limites_diarios = {
+            'sem_vip': 10,
+            'vip1': 30,
+            'vip2': 50,
+            'vip3': 100
+        }
+        limite = limites_diarios.get(usuario.role, 10)
 
-    return usuario.consultas_hoje < limite
+        return usuario.consultas_hoje < limite
+        
+    except Exception as e:
+        print(f"Erro ao verificar limite diário: {str(e)}")
+        return False
 
 def enviar_email_reset_senha(email, token):
     try:
@@ -315,57 +331,64 @@ def consulta(current_user):
         print(f"Consulta sucedida: {consulta_sucedida}")
         print(f"Dados do veículo: {dados_veiculo}")
 
-        # Definir limites e ganhos baseados no VIP
-        limites_diarios = {
-            'sem_vip': 10,
-            'vip1': 30,
-            'vip2': 50,
-            'vip3': 100
-        }
-
-        ganhos_por_consulta = {
-            'sem_vip': 1.0,
-            'vip1': 1.75,
-            'vip2': 2.50,
-            'vip3': 5.0
-        }
-
-        limite_diario = limites_diarios.get(current_user.role, 10)
-        ganho_por_consulta = ganhos_por_consulta.get(current_user.role, 1.0)
-
+        # Verificar limite diário
         if not verificar_limite_diario(current_user):
-            print(f"Limite diário atingido: {current_user.consultas_hoje}/{limite_diario}")
-            return jsonify({'message': f'Limite de {limite_diario} consultas diárias atingido.'}), 403
+            print(f"Limite diário atingido para usuário {current_user.nome}")
+            return jsonify({'message': 'Limite diário de consultas atingido'}), 403
 
-        current_user.consultas_hoje += 1
-        current_user.consultas_totais += 1
+        try:
+            # Definir limites e ganhos baseados no VIP
+            limites_diarios = {
+                'sem_vip': 10,
+                'vip1': 30,
+                'vip2': 50,
+                'vip3': 100
+            }
 
-        if consulta_sucedida:
-            current_user.saldo += ganho_por_consulta
-            current_user.ganhos_hoje += ganho_por_consulta
+            ganhos_por_consulta = {
+                'sem_vip': 1.0,
+                'vip1': 1.75,
+                'vip2': 2.50,
+                'vip3': 5.0
+            }
 
-            # Bônus para VIP Diamond (vip3) a cada 100 consultas
-            if current_user.role == 'vip3' and current_user.consultas_totais % 100 == 0:
-                current_user.saldo += 25.0
-                msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}. Bônus de R$25,00 por atingir 100 consultas!'
+            limite_diario = limites_diarios.get(current_user.role, 10)
+            ganho_por_consulta = ganhos_por_consulta.get(current_user.role, 1.0)
+
+            current_user.consultas_hoje += 1
+            current_user.consultas_totais += 1
+
+            if consulta_sucedida:
+                current_user.saldo += ganho_por_consulta
+                current_user.ganhos_hoje += ganho_por_consulta
+
+                # Bônus para VIP Diamond (vip3) a cada 100 consultas
+                if current_user.role == 'vip3' and current_user.consultas_totais % 100 == 0:
+                    current_user.saldo += 25.0
+                    msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}. Bônus de R$25,00 por atingir 100 consultas!'
+                else:
+                    msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}.'
             else:
-                msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}.'
-        else:
-            msg = 'Consulta não sucedida. Nenhum valor adicionado ao saldo.'
+                msg = 'Consulta não sucedida. Nenhum valor adicionado ao saldo.'
 
-        db.session.commit()
-        print(f"Consulta finalizada com sucesso: {msg}")
+            db.session.commit()
+            print(f"Consulta finalizada com sucesso: {msg}")
 
-        return jsonify({
-            'message': msg,
-            'consultas_hoje': current_user.consultas_hoje,
-            'consultas_totais': current_user.consultas_totais,
-            'saldo': current_user.saldo,
-            'ganhos_hoje': current_user.ganhos_hoje,
-            'limite_diario': limite_diario,
-            'ganho_por_consulta': ganho_por_consulta
-        }), 200
-        
+            return jsonify({
+                'message': msg,
+                'consultas_hoje': current_user.consultas_hoje,
+                'consultas_totais': current_user.consultas_totais,
+                'saldo': current_user.saldo,
+                'ganhos_hoje': current_user.ganhos_hoje,
+                'limite_diario': limite_diario,
+                'ganho_por_consulta': ganho_por_consulta
+            }), 200
+
+        except Exception as e:
+            print(f"Erro ao processar dados da consulta: {str(e)}")
+            db.session.rollback()
+            return jsonify({'message': 'Erro ao processar dados da consulta'}), 500
+            
     except Exception as e:
         print(f"Erro na rota de consulta: {str(e)}")
         db.session.rollback()
