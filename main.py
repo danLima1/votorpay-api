@@ -11,16 +11,23 @@ import string
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity
 
 app = Flask(__name__)
 CORS(app)  # Habilita CORS para todas as rotas e origens
+
 # -----------------------------------------------------------------------------
 # Configurações
 # -----------------------------------------------------------------------------
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:POqEhF0Uz8N1IPQk@maliciously-upward-kelpie.data-1.use1.tembo.io:5432/postgres'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'fa0b66aedea910162f3bdb38c72817923e3807a53090d4683d50e00337ea86c4'
+
+# Configurações JWT
+app.config['JWT_SECRET_KEY'] = 'fa0b66aedea910162f3bdb38c72817923e3807a53090d4683d50e00337ea86c4'
+app.config['JWT_TOKEN_LOCATION'] = ['headers']
+app.config['JWT_HEADER_NAME'] = 'Authorization'
+app.config['JWT_HEADER_TYPE'] = 'Bearer'
 
 # Configurações do SMTP
 SMTP_SERVER = "smtp.mailgun.org"
@@ -30,6 +37,8 @@ SMTP_PASSWORD = "Daniel30055@"  # Substitua pela sua senha de app do Gmail
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
+
+jwt = JWTManager(app)
 
 # -----------------------------------------------------------------------------
 # Modelos
@@ -501,40 +510,52 @@ def blackpay_webhook():
         transaction_data = request.json
         
         # Verificar se é uma notificação de pagamento
-        if transaction_data.get('event') == 'transaction.paid':
+        if transaction_data.get('event') == 'TRANSACTION_PAID':
+            # Extrair dados necessários
             transaction_id = transaction_data.get('transaction', {}).get('id')
-            metadata = transaction_data.get('transaction', {}).get('metadata', {})
-            vip_type = metadata.get('vip_type')
+            client_data = transaction_data.get('client', {})
+            cpf = client_data.get('cpf')
             
-            print(f"Pagamento confirmado - Transaction ID: {transaction_id}, VIP Type: {vip_type}")
+            # Extrair tipo de VIP do nome do produto
+            order_items = transaction_data.get('orderItems', [])
+            if not order_items:
+                return jsonify({'status': 'error', 'message': 'Nenhum item no pedido'}), 400
+                
+            product_name = order_items[0].get('product', {}).get('name', '').lower()
+            if 'vip1' in product_name:
+                vip_type = 'vip1'
+            elif 'vip2' in product_name:
+                vip_type = 'vip2'
+            elif 'vip3' in product_name:
+                vip_type = 'vip3'
+            else:
+                return jsonify({'status': 'error', 'message': 'Tipo de VIP não identificado'}), 400
             
-            if not transaction_id or not vip_type:
+            print(f"Pagamento confirmado - Transaction ID: {transaction_id}, CPF: {cpf}, VIP Type: {vip_type}")
+            
+            if not transaction_id or not cpf:
                 print("Dados incompletos no webhook")
                 return jsonify({'status': 'error', 'message': 'Dados incompletos'}), 400
             
             # Encontrar usuário pelo CPF
-            usuario = Usuario.query.filter_by(cpf=transaction_data.get('client', {}).get('document')).first()
+            usuario = Usuario.query.filter_by(cpf=cpf).first()
             if not usuario:
                 return jsonify({'status': 'error', 'message': 'Usuário não encontrado'}), 404
 
             # Atualizar VIP do usuário
-            if vip_type in ['vip1', 'vip2', 'vip3']:
-                usuario.role = vip_type
-                # Definir data de expiração para 7 dias
-                usuario.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
-                usuario.ultima_transacao_id = transaction_id
-                db.session.commit()
-                
-                print(f"VIP atualizado: Usuário {usuario.nome} (CPF: {usuario.cpf}) -> {vip_type}")
-                return jsonify({
-                    'status': 'success',
-                    'message': 'VIP atualizado com sucesso',
-                    'user_id': usuario.id,
-                    'new_role': vip_type,
-                    'expira_em': usuario.data_expiracao_vip.isoformat()
-                }), 200
-            else:
-                return jsonify({'status': 'error', 'message': 'Tipo de VIP inválido'}), 400
+            usuario.role = vip_type
+            usuario.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+            usuario.ultima_transacao_id = transaction_id
+            db.session.commit()
+            
+            print(f"VIP atualizado: Usuário {usuario.nome} (CPF: {usuario.cpf}) -> {vip_type}")
+            return jsonify({
+                'status': 'success',
+                'message': 'VIP atualizado com sucesso',
+                'user_id': usuario.id,
+                'new_role': vip_type,
+                'expira_em': usuario.data_expiracao_vip.isoformat()
+            }), 200
         
         return jsonify({'status': 'success'}), 200
         
