@@ -343,16 +343,32 @@ def get_usuario(current_user):
         
         # Verificar se o VIP expirou
         agora = datetime.datetime.now(datetime.UTC)
-        if current_user.role != 'sem_vip' and current_user.data_expiracao_vip and current_user.data_expiracao_vip < agora:
-            current_user.role = 'sem_vip'
-            current_user.data_expiracao_vip = None
-            db.session.commit()
+        if current_user.role != 'sem_vip' and current_user.data_expiracao_vip:
+            # Garantir que a data de expiração tenha timezone
+            data_expiracao = current_user.data_expiracao_vip
+            if data_expiracao.tzinfo is None:
+                data_expiracao = data_expiracao.replace(tzinfo=datetime.UTC)
+                
+            if data_expiracao < agora:
+                current_user.role = 'sem_vip'
+                current_user.data_expiracao_vip = None
+                db.session.commit()
+                print(f"VIP expirado para usuário {current_user.nome}")
 
         usuarios_indicados = [{
             'id': u.id,
             'nome': u.nome,
             'data_cadastro': u.data_cadastro.strftime('%d/%m/%Y') if hasattr(u, 'data_cadastro') else None
         } for u in current_user.usuarios_indicados.all()]
+
+        # Calcular dias restantes com segurança
+        dias_restantes = 0
+        if current_user.data_expiracao_vip:
+            data_expiracao = current_user.data_expiracao_vip
+            if data_expiracao.tzinfo is None:
+                data_expiracao = data_expiracao.replace(tzinfo=datetime.UTC)
+            if data_expiracao > agora:
+                dias_restantes = (data_expiracao - agora).days
 
         return jsonify({
             'id': current_user.id,
@@ -369,7 +385,7 @@ def get_usuario(current_user):
             'ganhos_hoje': current_user.ganhos_hoje,
             'role': current_user.role,
             'vip_expira_em': current_user.data_expiracao_vip.isoformat() if current_user.data_expiracao_vip else None,
-            'dias_restantes_vip': (current_user.data_expiracao_vip - agora).days if current_user.data_expiracao_vip and current_user.data_expiracao_vip > agora else 0
+            'dias_restantes_vip': dias_restantes
         }), 200
     except Exception as e:
         print(f"Erro ao obter dados do usuário: {str(e)}")
