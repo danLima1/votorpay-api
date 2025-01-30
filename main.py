@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 from flask_cors import CORS
@@ -15,13 +15,30 @@ import threading
 import time
 
 app = Flask(__name__)
+
+# Configuração do CORS mais permissiva
 CORS(app, resources={
     r"/*": {
         "origins": ["http://127.0.0.1:5500", "https://votopayad.vercel.app"],
         "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True,
+        "max_age": 600
     }
 })
+
+# Middleware para tratar preflight requests
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin", "*"))
+        response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+        response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        response.headers.add("Access-Control-Allow-Credentials", "true")
+        response.headers.add("Access-Control-Max-Age", "600")
+        return response
 
 # -----------------------------------------------------------------------------
 # Configurações
@@ -90,9 +107,11 @@ class CartaoCredito(db.Model):
 def token_requerido(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        if request.method == "OPTIONS":
+            return jsonify({}), 200
+
         token = None
         auth_header = request.headers.get('Authorization', '')
-        print(f"Auth header recebido: {auth_header}")
 
         if auth_header:
             try:
@@ -100,37 +119,27 @@ def token_requerido(f):
                     token = auth_header.split(' ')[1]
                 else:
                     token = auth_header
-                print(f"Token extraído: {token}")
             except Exception as e:
-                print(f"Erro ao extrair token: {str(e)}")
                 return jsonify({'message': 'Token inválido'}), 401
 
         if not token:
-            print("Token não fornecido")
             return jsonify({'message': 'Token não fornecido'}), 401
 
         try:
-            print("Tentando decodificar token...")
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            print(f"Token decodificado: {data}")
-            
             current_user = Usuario.query.get(data['id'])
             if not current_user:
-                print(f"Usuário não encontrado para ID: {data['id']}")
                 return jsonify({'message': 'Usuário não encontrado'}), 404
                 
-            print(f"Usuário encontrado: {current_user.nome} (ID: {current_user.id})")
             return f(current_user, *args, **kwargs)
             
         except jwt.ExpiredSignatureError:
-            print("Token expirado")
             return jsonify({'message': 'Token expirado'}), 401
-        except jwt.InvalidTokenError as e:
-            print(f"Token inválido: {str(e)}")
+        except jwt.InvalidTokenError:
             return jsonify({'message': 'Token inválido'}), 401
         except Exception as e:
-            print(f"Erro na autenticação: {str(e)}")
             return jsonify({'message': 'Erro na autenticação'}), 401
+            
     return decorated
 
 def gerar_token(usuario):
@@ -672,9 +681,6 @@ def blackpay_webhook():
 @app.route('/solicitar-cartao', methods=['POST', 'OPTIONS'])
 @token_requerido
 def solicitar_cartao(current_user):
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-        
     try:
         # Verificar se já existe uma solicitação
         existing_request = CartaoCredito.query.filter_by(user_id=current_user.id).first()
@@ -700,7 +706,9 @@ def solicitar_cartao(current_user):
             numero=data["endereco"]["numero"],
             complemento=data["endereco"]["complemento"],
             cidade=data["endereco"]["cidade"],
-            estado=data["endereco"]["estado"]
+            estado=data["endereco"]["estado"],
+            data_solicitacao=datetime.datetime.now(datetime.UTC),
+            data_atualizacao=datetime.datetime.now(datetime.UTC)
         )
 
         db.session.add(solicitacao)
