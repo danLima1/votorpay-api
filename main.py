@@ -11,7 +11,7 @@ import string
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity
+from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, create_access_token
 
 app = Flask(__name__)
 CORS(app)  # Habilita CORS para todas as rotas e origens
@@ -72,29 +72,17 @@ class Usuario(db.Model):
 # -----------------------------------------------------------------------------
 def token_requerido(f):
     @wraps(f)
+    @jwt_required()
     def decorated(*args, **kwargs):
-        token = None
-        if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
-            parts = auth_header.split()
-            if len(parts) == 2 and parts[0].lower() == 'bearer':
-                token = parts[1]
-
-        if not token:
-            return jsonify({'message': 'Token JWT não fornecido.'}), 401
-
         try:
-            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            current_user = Usuario.query.get(data['id'])
+            current_user_id = get_jwt_identity()
+            current_user = Usuario.query.get(current_user_id)
             if not current_user:
-                return jsonify({'message': 'Usuário não encontrado.'}), 401
-        except jwt.ExpiredSignatureError:
-            return jsonify({'message': 'Token expirado.'}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({'message': 'Token inválido.'}), 401
-
-        return f(current_user, *args, **kwargs)
-
+                return jsonify({'message': 'Usuário não encontrado'}), 404
+            return f(current_user, *args, **kwargs)
+        except Exception as e:
+            print(f"Erro na autenticação: {str(e)}")
+            return jsonify({'message': 'Token inválido ou expirado'}), 401
     return decorated
 
 def gerar_token(usuario):
@@ -257,24 +245,25 @@ def cadastro():
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
-    cpf = data.get('cpf')
+    email = data.get('email')
     senha = data.get('senha')
 
-    if not all([cpf, senha]):
-        return jsonify({'message': 'CPF e senha são necessários.'}), 400
+    if not email or not senha:
+        return jsonify({'message': 'Email e senha são obrigatórios.'}), 400
 
-    usuario = Usuario.query.filter_by(cpf=cpf).first()
-    if not usuario:
-        return jsonify({'message': 'Usuário não encontrado.'}), 404
-
-    if bcrypt.check_password_hash(usuario.senha, senha):
-        token = gerar_token(usuario)
+    usuario = Usuario.query.filter_by(email=email).first()
+    if usuario and bcrypt.check_password_hash(usuario.senha, senha):
+        access_token = create_access_token(identity=usuario.id)
         return jsonify({
-            'message': 'Login bem-sucedido.',
-            'token': token
+            'token': access_token,
+            'user': {
+                'id': usuario.id,
+                'nome': usuario.nome,
+                'email': usuario.email,
+                'role': usuario.role
+            }
         }), 200
-    else:
-        return jsonify({'message': 'Senha incorreta.'}), 401
+    return jsonify({'message': 'Email ou senha inválidos.'}), 401
 
 @app.route('/consulta', methods=['POST'])
 @token_requerido
@@ -334,36 +323,40 @@ def consulta(current_user):
 @app.route('/usuario', methods=['GET'])
 @token_requerido
 def get_usuario(current_user):
-    # Verificar se o VIP expirou
-    agora = datetime.datetime.now(datetime.UTC)
-    if current_user.role != 'sem_vip' and current_user.data_expiracao_vip and current_user.data_expiracao_vip < agora:
-        current_user.role = 'sem_vip'
-        current_user.data_expiracao_vip = None
-        db.session.commit()
+    try:
+        # Verificar se o VIP expirou
+        agora = datetime.datetime.now(datetime.UTC)
+        if current_user.role != 'sem_vip' and current_user.data_expiracao_vip and current_user.data_expiracao_vip < agora:
+            current_user.role = 'sem_vip'
+            current_user.data_expiracao_vip = None
+            db.session.commit()
 
-    usuarios_indicados = [{
-        'id': u.id,
-        'nome': u.nome,
-        'data_cadastro': u.data_cadastro.strftime('%d/%m/%Y') if hasattr(u, 'data_cadastro') else None
-    } for u in current_user.usuarios_indicados.all()]
+        usuarios_indicados = [{
+            'id': u.id,
+            'nome': u.nome,
+            'data_cadastro': u.data_cadastro.strftime('%d/%m/%Y') if hasattr(u, 'data_cadastro') else None
+        } for u in current_user.usuarios_indicados.all()]
 
-    return jsonify({
-        'id': current_user.id,
-        'nome': current_user.nome,
-        'cpf': current_user.cpf,
-        'email': current_user.email,
-        'numero_celular': current_user.numero_celular,
-        'consultas_hoje': current_user.consultas_hoje,
-        'consultas_totais': current_user.consultas_totais,
-        'saldo': current_user.saldo,
-        'codigo_indicacao': current_user.codigo_indicacao,
-        'total_indicacoes': current_user.total_indicacoes,
-        'usuarios_indicados': usuarios_indicados,
-        'ganhos_hoje': current_user.ganhos_hoje,
-        'role': current_user.role,
-        'vip_expira_em': current_user.data_expiracao_vip.isoformat() if current_user.data_expiracao_vip else None,
-        'dias_restantes_vip': (current_user.data_expiracao_vip - agora).days if current_user.data_expiracao_vip and current_user.data_expiracao_vip > agora else 0
-    }), 200
+        return jsonify({
+            'id': current_user.id,
+            'nome': current_user.nome,
+            'cpf': current_user.cpf,
+            'email': current_user.email,
+            'numero_celular': current_user.numero_celular,
+            'consultas_hoje': current_user.consultas_hoje,
+            'consultas_totais': current_user.consultas_totais,
+            'saldo': current_user.saldo,
+            'codigo_indicacao': current_user.codigo_indicacao,
+            'total_indicacoes': current_user.total_indicacoes,
+            'usuarios_indicados': usuarios_indicados,
+            'ganhos_hoje': current_user.ganhos_hoje,
+            'role': current_user.role,
+            'vip_expira_em': current_user.data_expiracao_vip.isoformat() if current_user.data_expiracao_vip else None,
+            'dias_restantes_vip': (current_user.data_expiracao_vip - agora).days if current_user.data_expiracao_vip and current_user.data_expiracao_vip > agora else 0
+        }), 200
+    except Exception as e:
+        print(f"Erro ao obter dados do usuário: {str(e)}")
+        return jsonify({'message': 'Erro ao obter dados do usuário'}), 500
 
 @app.route('/consulta/<placa>', methods=['GET'])
 @token_requerido
