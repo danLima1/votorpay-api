@@ -28,6 +28,8 @@ app.config['JWT_SECRET_KEY'] = 'fa0b66aedea910162f3bdb38c72817923e3807a53090d468
 app.config['JWT_TOKEN_LOCATION'] = ['headers']
 app.config['JWT_HEADER_NAME'] = 'Authorization'
 app.config['JWT_HEADER_TYPE'] = 'Bearer'
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = datetime.timedelta(days=1)
+app.config['JWT_ERROR_MESSAGE_KEY'] = 'message'
 
 # Configurações do SMTP
 SMTP_SERVER = "smtp.mailgun.org"
@@ -72,17 +74,38 @@ class Usuario(db.Model):
 # -----------------------------------------------------------------------------
 def token_requerido(f):
     @wraps(f)
-    @jwt_required()
     def decorated(*args, **kwargs):
         try:
-            current_user_id = get_jwt_identity()
-            current_user = Usuario.query.get(current_user_id)
-            if not current_user:
-                return jsonify({'message': 'Usuário não encontrado'}), 404
-            return f(current_user, *args, **kwargs)
+            # Log para debug
+            print("Headers na autenticação:", dict(request.headers))
+            
+            auth_header = request.headers.get('Authorization')
+            if not auth_header:
+                return jsonify({'message': 'Token não fornecido'}), 401
+                
+            # Verificar formato do token
+            parts = auth_header.split()
+            if len(parts) != 2 or parts[0].lower() != 'bearer':
+                return jsonify({'message': 'Formato do token inválido'}), 401
+                
+            token = parts[1]
+            
+            # Decodificar token
+            try:
+                data = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=["HS256"])
+                current_user = Usuario.query.get(data.get('sub'))
+                if not current_user:
+                    return jsonify({'message': 'Usuário não encontrado'}), 404
+                return f(current_user, *args, **kwargs)
+            except jwt.ExpiredSignatureError:
+                return jsonify({'message': 'Token expirado'}), 401
+            except jwt.InvalidTokenError as e:
+                print(f"Erro no token: {str(e)}")
+                return jsonify({'message': 'Token inválido'}), 401
+                
         except Exception as e:
             print(f"Erro na autenticação: {str(e)}")
-            return jsonify({'message': 'Token inválido ou expirado'}), 401
+            return jsonify({'message': 'Erro na autenticação'}), 401
     return decorated
 
 def gerar_token(usuario):
@@ -244,26 +267,41 @@ def cadastro():
 
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.json
-    cpf = data.get('cpf')
-    senha = data.get('senha')
+    try:
+        data = request.json
+        cpf = data.get('cpf')
+        senha = data.get('senha')
 
-    if not cpf or not senha:
-        return jsonify({'message': 'CPF e senha são obrigatórios.'}), 400
+        if not cpf or not senha:
+            return jsonify({'message': 'CPF e senha são obrigatórios.'}), 400
 
-    usuario = Usuario.query.filter_by(cpf=cpf).first()
-    if usuario and bcrypt.check_password_hash(usuario.senha, senha):
-        access_token = create_access_token(identity=usuario.id)
-        return jsonify({
-            'token': access_token,
-            'user': {
-                'id': usuario.id,
-                'nome': usuario.nome,
-                'cpf': usuario.cpf,
-                'role': usuario.role
-            }
-        }), 200
-    return jsonify({'message': 'CPF ou senha inválidos.'}), 401
+        usuario = Usuario.query.filter_by(cpf=cpf).first()
+        if usuario and bcrypt.check_password_hash(usuario.senha, senha):
+            # Criar token com claims adicionais
+            access_token = create_access_token(
+                identity=usuario.id,
+                additional_claims={
+                    'nome': usuario.nome,
+                    'cpf': usuario.cpf,
+                    'role': usuario.role
+                }
+            )
+            
+            print(f"Token gerado para usuário {usuario.nome} (CPF: {usuario.cpf})")
+            
+            return jsonify({
+                'token': access_token,
+                'user': {
+                    'id': usuario.id,
+                    'nome': usuario.nome,
+                    'cpf': usuario.cpf,
+                    'role': usuario.role
+                }
+            }), 200
+        return jsonify({'message': 'CPF ou senha inválidos.'}), 401
+    except Exception as e:
+        print(f"Erro no login: {str(e)}")
+        return jsonify({'message': 'Erro ao realizar login'}), 500
 
 @app.route('/consulta', methods=['POST'])
 @token_requerido
@@ -324,6 +362,9 @@ def consulta(current_user):
 @token_requerido
 def get_usuario(current_user):
     try:
+        # Log para debug
+        print("Headers recebidos:", dict(request.headers))
+        
         # Verificar se o VIP expirou
         agora = datetime.datetime.now(datetime.UTC)
         if current_user.role != 'sem_vip' and current_user.data_expiracao_vip and current_user.data_expiracao_vip < agora:
