@@ -11,6 +11,7 @@ import string
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from flask_jwt_extended import jwt_required, get_jwt_identity
 
 app = Flask(__name__)
 CORS(app)  # Habilita CORS para todas as rotas e origens
@@ -156,6 +157,36 @@ def enviar_email_reset_senha(email, token):
     except Exception as e:
         print(f"Erro ao enviar email: {str(e)}")
         return False
+
+def verificar_pagamento_blackpay(transaction_id):
+    try:
+        # Configurações da BlackPay
+        publicKey = 'votopayoficial_zt03ro1mjxej5tx6'
+        secretKey = '7436pm952nxdcmq0motadjryc4k2guk7ohlb683460nceepdjmgq08nr5i6y07qq'
+        
+        # URL da API
+        url = f"https://app.blackpay.io/api/v1/gateway/transactions?id={transaction_id}"
+        
+        # Headers
+        headers = {
+            'Accept': 'application/json',
+            'x-public-key': publicKey,
+            'x-secret-key': secretKey
+        }
+        
+        # Fazer requisição
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Lança exceção para status codes de erro
+        
+        # Parse da resposta
+        payment_data = response.json()
+        print(f"Resposta da BlackPay: {payment_data}")
+        
+        return payment_data.get('status', 'UNKNOWN')
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Erro na requisição à BlackPay: {str(e)}")
+        raise Exception(f"Erro ao verificar pagamento: {str(e)}")
 
 # -----------------------------------------------------------------------------
 # Endpoints
@@ -406,67 +437,85 @@ def reset_senha():
         return jsonify({'message': 'Erro ao atualizar senha.'}), 500
 
 @app.route('/atualizar-vip', methods=['POST'])
-@token_requerido
-def atualizar_vip(current_user):
-    data = request.json
-    transaction_id = data.get('transaction_id')
-    vip_type = data.get('vip_type')
-    
-    if not all([transaction_id, vip_type]):
-        return jsonify({'message': 'Dados incompletos.'}), 400
-    
-    # Verificar status da transação na BlackPay
+@jwt_required()
+def atualizar_vip():
     try:
-        response = requests.get(
-            f'https://api.blackpay.io/v1/pix/receive/{transaction_id}',
-            headers={'Authorization': 'Bearer seu_token_blackpay'}
-        )
+        # Log dos dados recebidos
+        print("Dados recebidos:", request.json)
         
-        payment_data = response.json()
+        # Obter dados da requisição
+        data = request.json
+        transaction_id = data.get('transaction_id')
+        vip_type = data.get('vip_type')
         
-        if payment_data.get('status') == 'paid':
-            # Atualizar role do usuário baseado no tipo de VIP
-            if vip_type in ['vip1', 'vip2', 'vip3']:
-                current_user.role = vip_type
-                db.session.commit()
-                return jsonify({
-                    'message': 'VIP atualizado com sucesso!',
-                    'new_role': vip_type
-                }), 200
-            else:
-                return jsonify({'message': 'Tipo de VIP inválido.'}), 400
+        if not transaction_id or not vip_type:
+            return jsonify({'status': 'error', 'message': 'Dados incompletos'}), 400
+            
+        # Obter usuário atual
+        current_user_id = get_jwt_identity()
+        usuario = Usuario.query.get(current_user_id)
+        
+        if not usuario:
+            return jsonify({'status': 'error', 'message': 'Usuário não encontrado'}), 404
+            
+        # Verificar status do pagamento na BlackPay
+        try:
+            payment_status = verificar_pagamento_blackpay(transaction_id)
+            print(f"Status do pagamento: {payment_status}")
+            
+            if payment_status != 'COMPLETED':
+                return jsonify({'status': 'error', 'message': f'Status do pagamento inválido: {payment_status}'}), 400
+                
+        except Exception as e:
+            print(f"Erro ao verificar pagamento na BlackPay: {str(e)}")
+            return jsonify({'status': 'error', 'message': 'Erro ao verificar pagamento'}), 500
+            
+        # Atualizar VIP do usuário
+        if vip_type in ['vip1', 'vip2', 'vip3']:
+            usuario.role = vip_type
+            usuario.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+            usuario.ultima_transacao_id = transaction_id
+            
+            db.session.commit()
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'VIP atualizado com sucesso',
+                'vip_type': vip_type,
+                'expira_em': usuario.data_expiracao_vip.isoformat()
+            }), 200
         else:
-            return jsonify({'message': 'Pagamento ainda não confirmado.'}), 402
+            return jsonify({'status': 'error', 'message': 'Tipo de VIP inválido'}), 400
             
     except Exception as e:
-        print(f"Erro ao verificar pagamento: {str(e)}")
-        return jsonify({'message': 'Erro ao verificar pagamento.'}), 500
+        print(f"Erro ao atualizar VIP: {str(e)}")
+        return jsonify({'status': 'error', 'message': 'Erro interno ao atualizar VIP'}), 500
 
 @app.route('/webhook/blackpay', methods=['POST'])
 def blackpay_webhook():
-    # Verificar assinatura do webhook para segurança
-    signature = request.headers.get('x-signature')
-    if not signature:
-        return jsonify({'message': 'Assinatura não fornecida'}), 401
-
-    data = request.json
-    
     try:
+        # Log do payload recebido
+        print("Webhook recebido:", request.json)
+        
+        # Dados da transação
+        transaction_data = request.json
+        
         # Verificar se é uma notificação de pagamento
-        if data.get('event') == 'transaction.paid':
-            transaction_data = data.get('data', {})
-            transaction_id = transaction_data.get('transactionId')
-            metadata = transaction_data.get('metadata', {})
+        if transaction_data.get('event') == 'transaction.paid':
+            transaction_id = transaction_data.get('transaction', {}).get('id')
+            metadata = transaction_data.get('transaction', {}).get('metadata', {})
             vip_type = metadata.get('vip_type')
-            client_document = transaction_data.get('client', {}).get('document')
-
-            if not all([transaction_id, vip_type, client_document]):
-                return jsonify({'message': 'Dados incompletos'}), 400
-
+            
+            print(f"Pagamento confirmado - Transaction ID: {transaction_id}, VIP Type: {vip_type}")
+            
+            if not transaction_id or not vip_type:
+                print("Dados incompletos no webhook")
+                return jsonify({'status': 'error', 'message': 'Dados incompletos'}), 400
+            
             # Encontrar usuário pelo CPF
-            usuario = Usuario.query.filter_by(cpf=client_document).first()
+            usuario = Usuario.query.filter_by(cpf=transaction_data.get('client', {}).get('document')).first()
             if not usuario:
-                return jsonify({'message': 'Usuário não encontrado'}), 404
+                return jsonify({'status': 'error', 'message': 'Usuário não encontrado'}), 404
 
             # Atualizar VIP do usuário
             if vip_type in ['vip1', 'vip2', 'vip3']:
@@ -478,19 +527,20 @@ def blackpay_webhook():
                 
                 print(f"VIP atualizado: Usuário {usuario.nome} (CPF: {usuario.cpf}) -> {vip_type}")
                 return jsonify({
+                    'status': 'success',
                     'message': 'VIP atualizado com sucesso',
                     'user_id': usuario.id,
                     'new_role': vip_type,
                     'expira_em': usuario.data_expiracao_vip.isoformat()
                 }), 200
             else:
-                return jsonify({'message': 'Tipo de VIP inválido'}), 400
-
-        return jsonify({'message': 'Evento não processado'}), 200
-
+                return jsonify({'status': 'error', 'message': 'Tipo de VIP inválido'}), 400
+        
+        return jsonify({'status': 'success'}), 200
+        
     except Exception as e:
         print(f"Erro no webhook: {str(e)}")
-        return jsonify({'message': 'Erro interno'}), 500
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
