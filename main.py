@@ -11,7 +11,6 @@ import string
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from flask_jwt_extended import JWTManager, jwt_required, get_jwt_identity, create_access_token
 
 app = Flask(__name__)
 CORS(app)  # Habilita CORS para todas as rotas e origens
@@ -23,24 +22,14 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:POqEhF0Uz8N1IPQk@
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'fa0b66aedea910162f3bdb38c72817923e3807a53090d4683d50e00337ea86c4'
 
-# Configurações JWT
-app.config['JWT_SECRET_KEY'] = 'fa0b66aedea910162f3bdb38c72817923e3807a53090d4683d50e00337ea86c4'
-app.config['JWT_TOKEN_LOCATION'] = ['headers']
-app.config['JWT_HEADER_NAME'] = 'Authorization'
-app.config['JWT_HEADER_TYPE'] = 'Bearer'
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = datetime.timedelta(days=1)
-app.config['JWT_ERROR_MESSAGE_KEY'] = 'message'
-
 # Configurações do SMTP
 SMTP_SERVER = "smtp.mailgun.org"
 SMTP_PORT = 587
-SMTP_USERNAME = "teste42@typebot.searchapi.shop"  # Substitua pelo seu email
-SMTP_PASSWORD = "Daniel30055@"  # Substitua pela sua senha de app do Gmail
+SMTP_USERNAME = "teste42@typebot.searchapi.shop"
+SMTP_PASSWORD = "Daniel30055@"
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
-
-jwt = JWTManager(app)
 
 # -----------------------------------------------------------------------------
 # Modelos
@@ -75,34 +64,26 @@ class Usuario(db.Model):
 def token_requerido(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        try:
-            # Log para debug
-            print("Headers na autenticação:", dict(request.headers))
-            
-            auth_header = request.headers.get('Authorization')
-            if not auth_header:
-                return jsonify({'message': 'Token não fornecido'}), 401
-                
-            # Verificar formato do token
+        token = None
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
             parts = auth_header.split()
-            if len(parts) != 2 or parts[0].lower() != 'bearer':
-                return jsonify({'message': 'Formato do token inválido'}), 401
-                
-            token = parts[1]
-            
-            # Decodificar token
-            try:
-                data = jwt.decode(token, app.config['JWT_SECRET_KEY'], algorithms=["HS256"])
-                current_user = Usuario.query.get(data.get('sub'))
-                if not current_user:
-                    return jsonify({'message': 'Usuário não encontrado'}), 404
-                return f(current_user, *args, **kwargs)
-            except jwt.ExpiredSignatureError:
-                return jsonify({'message': 'Token expirado'}), 401
-            except jwt.InvalidTokenError as e:
-                print(f"Erro no token: {str(e)}")
-                return jsonify({'message': 'Token inválido'}), 401
-                
+            if len(parts) == 2 and parts[0].lower() == 'bearer':
+                token = parts[1]
+
+        if not token:
+            return jsonify({'message': 'Token não fornecido'}), 401
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = Usuario.query.get(data['id'])
+            if not current_user:
+                return jsonify({'message': 'Usuário não encontrado'}), 404
+            return f(current_user, *args, **kwargs)
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token expirado'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'message': 'Token inválido'}), 401
         except Exception as e:
             print(f"Erro na autenticação: {str(e)}")
             return jsonify({'message': 'Erro na autenticação'}), 401
@@ -277,20 +258,15 @@ def login():
 
         usuario = Usuario.query.filter_by(cpf=cpf).first()
         if usuario and bcrypt.check_password_hash(usuario.senha, senha):
-            # Criar token com claims adicionais
-            access_token = create_access_token(
-                identity=usuario.id,
-                additional_claims={
-                    'nome': usuario.nome,
-                    'cpf': usuario.cpf,
-                    'role': usuario.role
-                }
-            )
+            token = jwt.encode({
+                'id': usuario.id,
+                'exp': datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
+            }, app.config['SECRET_KEY'], algorithm='HS256')
             
             print(f"Token gerado para usuário {usuario.nome} (CPF: {usuario.cpf})")
             
             return jsonify({
-                'token': access_token,
+                'token': token,
                 'user': {
                     'id': usuario.id,
                     'nome': usuario.nome,
@@ -480,8 +456,8 @@ def reset_senha():
         return jsonify({'message': 'Erro ao atualizar senha.'}), 500
 
 @app.route('/atualizar-vip', methods=['POST'])
-@jwt_required()
-def atualizar_vip():
+@token_requerido
+def atualizar_vip(current_user):
     try:
         # Log dos dados recebidos
         print("Dados recebidos:", request.json)
@@ -493,13 +469,6 @@ def atualizar_vip():
         
         if not transaction_id or not vip_type:
             return jsonify({'status': 'error', 'message': 'Dados incompletos'}), 400
-            
-        # Obter usuário atual
-        current_user_id = get_jwt_identity()
-        usuario = Usuario.query.get(current_user_id)
-        
-        if not usuario:
-            return jsonify({'status': 'error', 'message': 'Usuário não encontrado'}), 404
             
         # Verificar status do pagamento na BlackPay
         try:
@@ -515,9 +484,9 @@ def atualizar_vip():
             
         # Atualizar VIP do usuário
         if vip_type in ['vip1', 'vip2', 'vip3']:
-            usuario.role = vip_type
-            usuario.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
-            usuario.ultima_transacao_id = transaction_id
+            current_user.role = vip_type
+            current_user.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+            current_user.ultima_transacao_id = transaction_id
             
             db.session.commit()
             
@@ -525,7 +494,7 @@ def atualizar_vip():
                 'status': 'success',
                 'message': 'VIP atualizado com sucesso',
                 'vip_type': vip_type,
-                'expira_em': usuario.data_expiracao_vip.isoformat()
+                'expira_em': current_user.data_expiracao_vip.isoformat()
             }), 200
         else:
             return jsonify({'status': 'error', 'message': 'Tipo de VIP inválido'}), 400
