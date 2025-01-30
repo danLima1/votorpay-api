@@ -11,6 +11,9 @@ import string
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import asyncio
+from bson import ObjectId
+from fastapi import Request, HTTPException
 
 app = Flask(__name__)
 CORS(app)  # Habilita CORS para todas as rotas e origens
@@ -641,6 +644,116 @@ def blackpay_webhook():
     except Exception as e:
         print(f"Erro no webhook: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# Endpoints do Cartão de Crédito
+@app.post("/solicitar-cartao")
+async def solicitar_cartao(request: Request):
+    try:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not token:
+            raise HTTPException(status_code=401, detail="Token não fornecido")
+
+        # Decodificar o token
+        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = payload.get('user_id')
+
+        # Verificar se o usuário existe
+        user = await db["usuarios"].find_one({"_id": ObjectId(user_id)})
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+        # Verificar se já existe uma solicitação
+        existing_request = await db["cartao_credito"].find_one({"user_id": ObjectId(user_id)})
+        if existing_request:
+            return {"status": existing_request["status"], "message": "Você já possui uma solicitação de cartão"}
+
+        # Obter dados do corpo da requisição
+        data = await request.json()
+        
+        # Criar objeto de solicitação
+        solicitacao = {
+            "user_id": ObjectId(user_id),
+            "renda_mensal": float(data["renda_mensal"]),
+            "profissao": data["profissao"],
+            "data_nascimento": data["data_nascimento"],
+            "endereco": data["endereco"],
+            "negativado": data["negativado"],
+            "status": "em_analise",
+            "data_solicitacao": datetime.utcnow(),
+            "data_atualizacao": datetime.utcnow()
+        }
+
+        # Inserir no banco de dados
+        await db["cartao_credito"].insert_one(solicitacao)
+
+        # Agendar análise automática após 30 minutos
+        asyncio.create_task(analisar_cartao_apos_delay(user_id))
+
+        return {"status": "em_analise", "message": "Solicitação recebida com sucesso"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/status-cartao")
+async def status_cartao(request: Request):
+    try:
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not token:
+            raise HTTPException(status_code=401, detail="Token não fornecido")
+
+        # Decodificar o token
+        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = payload.get('user_id')
+
+        # Buscar status da solicitação
+        solicitacao = await db["cartao_credito"].find_one({"user_id": ObjectId(user_id)})
+        
+        if not solicitacao:
+            return {"tem_solicitacao": False}
+
+        # Calcular tempo restante se estiver em análise
+        tempo_restante = None
+        if solicitacao["status"] == "em_analise":
+            tempo_decorrido = datetime.utcnow() - solicitacao["data_solicitacao"]
+            tempo_restante = max(0, 1800 - tempo_decorrido.total_seconds())  # 1800 segundos = 30 minutos
+
+        return {
+            "tem_solicitacao": True,
+            "status": solicitacao["status"],
+            "tempo_restante": tempo_restante,
+            "data_solicitacao": solicitacao["data_solicitacao"],
+            "data_atualizacao": solicitacao["data_atualizacao"]
+        }
+
+async def analisar_cartao_apos_delay(user_id):
+    try:
+        # Aguardar 30 minutos
+        await asyncio.sleep(1800)  # 1800 segundos = 30 minutos
+
+        # Verificar se a solicitação ainda existe e está em análise
+        solicitacao = await db["cartao_credito"].find_one({
+            "user_id": ObjectId(user_id),
+            "status": "em_analise"
+        })
+
+        if solicitacao:
+            # 50% de chance de aprovação
+            aprovado = random.choice([True, False])
+            
+            # Atualizar status
+            novo_status = "aprovado" if aprovado else "reprovado"
+            await db["cartao_credito"].update_one(
+                {"user_id": ObjectId(user_id)},
+                {
+                    "$set": {
+                        "status": novo_status,
+                        "data_atualizacao": datetime.utcnow()
+                    }
+                }
+            )
+
+    except Exception as e:
+        print(f"Erro ao analisar cartão: {str(e)}")
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
