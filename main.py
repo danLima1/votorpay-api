@@ -65,24 +65,42 @@ def token_requerido(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
-        if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
-            parts = auth_header.split()
-            if len(parts) == 2 and parts[0].lower() == 'bearer':
-                token = parts[1]
+        auth_header = request.headers.get('Authorization', '')
+        print(f"Auth header recebido: {auth_header}")
+
+        if auth_header:
+            try:
+                if auth_header.startswith('Bearer '):
+                    token = auth_header.split(' ')[1]
+                else:
+                    token = auth_header
+                print(f"Token extraído: {token}")
+            except Exception as e:
+                print(f"Erro ao extrair token: {str(e)}")
+                return jsonify({'message': 'Token inválido'}), 401
 
         if not token:
+            print("Token não fornecido")
             return jsonify({'message': 'Token não fornecido'}), 401
 
         try:
+            print("Tentando decodificar token...")
             data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            print(f"Token decodificado: {data}")
+            
             current_user = Usuario.query.get(data['id'])
             if not current_user:
+                print(f"Usuário não encontrado para ID: {data['id']}")
                 return jsonify({'message': 'Usuário não encontrado'}), 404
+                
+            print(f"Usuário encontrado: {current_user.nome} (ID: {current_user.id})")
             return f(current_user, *args, **kwargs)
+            
         except jwt.ExpiredSignatureError:
+            print("Token expirado")
             return jsonify({'message': 'Token expirado'}), 401
-        except jwt.InvalidTokenError:
+        except jwt.InvalidTokenError as e:
+            print(f"Token inválido: {str(e)}")
             return jsonify({'message': 'Token inválido'}), 401
         except Exception as e:
             print(f"Erro na autenticação: {str(e)}")
@@ -282,57 +300,76 @@ def login():
 @app.route('/consulta', methods=['POST'])
 @token_requerido
 def consulta(current_user):
-    data = request.json
-    consulta_sucedida = data.get('consulta_sucedida', False)
+    try:
+        print(f"Iniciando consulta para usuário: {current_user.nome} (ID: {current_user.id})")
+        data = request.get_json()
+        print(f"Dados recebidos: {data}")
+        
+        if data is None:
+            print("Dados não fornecidos")
+            return jsonify({'message': 'Dados não fornecidos'}), 400
+            
+        consulta_sucedida = data.get('consulta_sucedida')
+        dados_veiculo = data.get('dados_veiculo')
+        
+        print(f"Consulta sucedida: {consulta_sucedida}")
+        print(f"Dados do veículo: {dados_veiculo}")
 
-    # Definir limites e ganhos baseados no VIP
-    limites_diarios = {
-        'sem_vip': 10,
-        'vip1': 30,
-        'vip2': 50,
-        'vip3': 100
-    }
+        # Definir limites e ganhos baseados no VIP
+        limites_diarios = {
+            'sem_vip': 10,
+            'vip1': 30,
+            'vip2': 50,
+            'vip3': 100
+        }
 
-    ganhos_por_consulta = {
-        'sem_vip': 1.0,
-        'vip1': 1.75,
-        'vip2': 2.50,
-        'vip3': 5.0
-    }
+        ganhos_por_consulta = {
+            'sem_vip': 1.0,
+            'vip1': 1.75,
+            'vip2': 2.50,
+            'vip3': 5.0
+        }
 
-    limite_diario = limites_diarios.get(current_user.role, 10)
-    ganho_por_consulta = ganhos_por_consulta.get(current_user.role, 1.0)
+        limite_diario = limites_diarios.get(current_user.role, 10)
+        ganho_por_consulta = ganhos_por_consulta.get(current_user.role, 1.0)
 
-    if not verificar_limite_diario(current_user):
-        return jsonify({'message': f'Limite de {limite_diario} consultas diárias atingido.'}), 403
+        if not verificar_limite_diario(current_user):
+            print(f"Limite diário atingido: {current_user.consultas_hoje}/{limite_diario}")
+            return jsonify({'message': f'Limite de {limite_diario} consultas diárias atingido.'}), 403
 
-    current_user.consultas_hoje += 1
-    current_user.consultas_totais += 1
+        current_user.consultas_hoje += 1
+        current_user.consultas_totais += 1
 
-    if consulta_sucedida:
-        current_user.saldo += ganho_por_consulta
-        current_user.ganhos_hoje += ganho_por_consulta
+        if consulta_sucedida:
+            current_user.saldo += ganho_por_consulta
+            current_user.ganhos_hoje += ganho_por_consulta
 
-        # Bônus para VIP Diamond (vip3) a cada 100 consultas
-        if current_user.role == 'vip3' and current_user.consultas_totais % 100 == 0:
-            current_user.saldo += 25.0
-            msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}. Bônus de R$25,00 por atingir 100 consultas!'
+            # Bônus para VIP Diamond (vip3) a cada 100 consultas
+            if current_user.role == 'vip3' and current_user.consultas_totais % 100 == 0:
+                current_user.saldo += 25.0
+                msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}. Bônus de R$25,00 por atingir 100 consultas!'
+            else:
+                msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}.'
         else:
-            msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}.'
-    else:
-        msg = 'Consulta não sucedida. Nenhum valor adicionado ao saldo.'
+            msg = 'Consulta não sucedida. Nenhum valor adicionado ao saldo.'
 
-    db.session.commit()
+        db.session.commit()
+        print(f"Consulta finalizada com sucesso: {msg}")
 
-    return jsonify({
-        'message': msg,
-        'consultas_hoje': current_user.consultas_hoje,
-        'consultas_totais': current_user.consultas_totais,
-        'saldo': current_user.saldo,
-        'ganhos_hoje': current_user.ganhos_hoje,
-        'limite_diario': limite_diario,
-        'ganho_por_consulta': ganho_por_consulta
-    }), 200
+        return jsonify({
+            'message': msg,
+            'consultas_hoje': current_user.consultas_hoje,
+            'consultas_totais': current_user.consultas_totais,
+            'saldo': current_user.saldo,
+            'ganhos_hoje': current_user.ganhos_hoje,
+            'limite_diario': limite_diario,
+            'ganho_por_consulta': ganho_por_consulta
+        }), 200
+        
+    except Exception as e:
+        print(f"Erro na rota de consulta: {str(e)}")
+        db.session.rollback()
+        return jsonify({'message': 'Erro ao processar consulta'}), 500
 
 @app.route('/usuario', methods=['GET'])
 @token_requerido
