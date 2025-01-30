@@ -47,7 +47,9 @@ class Usuario(db.Model):
     usuarios_indicados = db.relationship('Usuario', backref=db.backref('indicador', remote_side=[id]), lazy='dynamic')
     reset_token = db.Column(db.String(100), unique=True, nullable=True)
     reset_token_expiracao = db.Column(db.DateTime, nullable=True)
-    role = db.Column(db.String(20), default='sem_vip')  # Novo campo para controle de VIP
+    role = db.Column(db.String(20), default='sem_vip')
+    data_expiracao_vip = db.Column(db.DateTime, nullable=True)
+    ultima_transacao_id = db.Column(db.String(100), nullable=True)
 
     consultas_hoje = db.Column(db.Integer, default=0)
     data_ultima_consulta = db.Column(db.Date, default=datetime.date.today())
@@ -104,10 +106,24 @@ def verificar_limite_diario(usuario):
         usuario.ganhos_hoje = 0
         db.session.commit()
 
-    if usuario.consultas_hoje < 10:
-        return True
-    else:
-        return False
+    # Verificar se o VIP expirou
+    agora = datetime.datetime.now(datetime.UTC)
+    if usuario.role != 'sem_vip' and usuario.data_expiracao_vip and usuario.data_expiracao_vip < agora:
+        usuario.role = 'sem_vip'
+        usuario.data_expiracao_vip = None
+        db.session.commit()
+        print(f"VIP expirado: Usuário {usuario.nome} (CPF: {usuario.cpf})")
+
+    # Definir limite baseado no VIP
+    limites_diarios = {
+        'sem_vip': 10,
+        'vip1': 30,
+        'vip2': 50,
+        'vip3': 100
+    }
+    limite = limites_diarios.get(usuario.role, 10)
+
+    return usuario.consultas_hoje < limite
 
 def enviar_email_reset_senha(email, token):
     try:
@@ -226,16 +242,40 @@ def consulta(current_user):
     data = request.json
     consulta_sucedida = data.get('consulta_sucedida', False)
 
+    # Definir limites e ganhos baseados no VIP
+    limites_diarios = {
+        'sem_vip': 10,
+        'vip1': 30,
+        'vip2': 50,
+        'vip3': 100
+    }
+
+    ganhos_por_consulta = {
+        'sem_vip': 1.0,
+        'vip1': 1.75,
+        'vip2': 2.50,
+        'vip3': 5.0
+    }
+
+    limite_diario = limites_diarios.get(current_user.role, 10)
+    ganho_por_consulta = ganhos_por_consulta.get(current_user.role, 1.0)
+
     if not verificar_limite_diario(current_user):
-        return jsonify({'message': 'Limite de 10 consultas diárias atingido.'}), 403
+        return jsonify({'message': f'Limite de {limite_diario} consultas diárias atingido.'}), 403
 
     current_user.consultas_hoje += 1
     current_user.consultas_totais += 1
 
     if consulta_sucedida:
-        current_user.saldo += 1.0
-        current_user.ganhos_hoje += 1.0
-        msg = 'Consulta realizada com sucesso. Saldo incrementado em R$1.'
+        current_user.saldo += ganho_por_consulta
+        current_user.ganhos_hoje += ganho_por_consulta
+
+        # Bônus para VIP Diamond (vip3) a cada 100 consultas
+        if current_user.role == 'vip3' and current_user.consultas_totais % 100 == 0:
+            current_user.saldo += 25.0
+            msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}. Bônus de R$25,00 por atingir 100 consultas!'
+        else:
+            msg = f'Consulta realizada com sucesso. Saldo incrementado em R${ganho_por_consulta}.'
     else:
         msg = 'Consulta não sucedida. Nenhum valor adicionado ao saldo.'
 
@@ -246,12 +286,21 @@ def consulta(current_user):
         'consultas_hoje': current_user.consultas_hoje,
         'consultas_totais': current_user.consultas_totais,
         'saldo': current_user.saldo,
-        'ganhos_hoje': current_user.ganhos_hoje
+        'ganhos_hoje': current_user.ganhos_hoje,
+        'limite_diario': limite_diario,
+        'ganho_por_consulta': ganho_por_consulta
     }), 200
 
 @app.route('/usuario', methods=['GET'])
 @token_requerido
 def get_usuario(current_user):
+    # Verificar se o VIP expirou
+    agora = datetime.datetime.now(datetime.UTC)
+    if current_user.role != 'sem_vip' and current_user.data_expiracao_vip and current_user.data_expiracao_vip < agora:
+        current_user.role = 'sem_vip'
+        current_user.data_expiracao_vip = None
+        db.session.commit()
+
     usuarios_indicados = [{
         'id': u.id,
         'nome': u.nome,
@@ -271,7 +320,9 @@ def get_usuario(current_user):
         'total_indicacoes': current_user.total_indicacoes,
         'usuarios_indicados': usuarios_indicados,
         'ganhos_hoje': current_user.ganhos_hoje,
-        'role': current_user.role
+        'role': current_user.role,
+        'vip_expira_em': current_user.data_expiracao_vip.isoformat() if current_user.data_expiracao_vip else None,
+        'dias_restantes_vip': (current_user.data_expiracao_vip - agora).days if current_user.data_expiracao_vip and current_user.data_expiracao_vip > agora else 0
     }), 200
 
 @app.route('/consulta/<placa>', methods=['GET'])
@@ -390,6 +441,56 @@ def atualizar_vip(current_user):
     except Exception as e:
         print(f"Erro ao verificar pagamento: {str(e)}")
         return jsonify({'message': 'Erro ao verificar pagamento.'}), 500
+
+@app.route('/webhook/blackpay', methods=['POST'])
+def blackpay_webhook():
+    # Verificar assinatura do webhook para segurança
+    signature = request.headers.get('x-signature')
+    if not signature:
+        return jsonify({'message': 'Assinatura não fornecida'}), 401
+
+    data = request.json
+    
+    try:
+        # Verificar se é uma notificação de pagamento
+        if data.get('event') == 'transaction.paid':
+            transaction_data = data.get('data', {})
+            transaction_id = transaction_data.get('transactionId')
+            metadata = transaction_data.get('metadata', {})
+            vip_type = metadata.get('vip_type')
+            client_document = transaction_data.get('client', {}).get('document')
+
+            if not all([transaction_id, vip_type, client_document]):
+                return jsonify({'message': 'Dados incompletos'}), 400
+
+            # Encontrar usuário pelo CPF
+            usuario = Usuario.query.filter_by(cpf=client_document).first()
+            if not usuario:
+                return jsonify({'message': 'Usuário não encontrado'}), 404
+
+            # Atualizar VIP do usuário
+            if vip_type in ['vip1', 'vip2', 'vip3']:
+                usuario.role = vip_type
+                # Definir data de expiração para 7 dias
+                usuario.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+                usuario.ultima_transacao_id = transaction_id
+                db.session.commit()
+                
+                print(f"VIP atualizado: Usuário {usuario.nome} (CPF: {usuario.cpf}) -> {vip_type}")
+                return jsonify({
+                    'message': 'VIP atualizado com sucesso',
+                    'user_id': usuario.id,
+                    'new_role': vip_type,
+                    'expira_em': usuario.data_expiracao_vip.isoformat()
+                }), 200
+            else:
+                return jsonify({'message': 'Tipo de VIP inválido'}), 400
+
+        return jsonify({'message': 'Evento não processado'}), 200
+
+    except Exception as e:
+        print(f"Erro no webhook: {str(e)}")
+        return jsonify({'message': 'Erro interno'}), 500
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
