@@ -245,13 +245,13 @@ def cadastro():
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
-    email = data.get('email')
+    cpf = data.get('cpf')
     senha = data.get('senha')
 
-    if not email or not senha:
-        return jsonify({'message': 'Email e senha são obrigatórios.'}), 400
+    if not cpf or not senha:
+        return jsonify({'message': 'CPF e senha são obrigatórios.'}), 400
 
-    usuario = Usuario.query.filter_by(email=email).first()
+    usuario = Usuario.query.filter_by(cpf=cpf).first()
     if usuario and bcrypt.check_password_hash(usuario.senha, senha):
         access_token = create_access_token(identity=usuario.id)
         return jsonify({
@@ -259,11 +259,11 @@ def login():
             'user': {
                 'id': usuario.id,
                 'nome': usuario.nome,
-                'email': usuario.email,
+                'cpf': usuario.cpf,
                 'role': usuario.role
             }
         }), 200
-    return jsonify({'message': 'Email ou senha inválidos.'}), 401
+    return jsonify({'message': 'CPF ou senha inválidos.'}), 401
 
 @app.route('/consulta', methods=['POST'])
 @token_requerido
