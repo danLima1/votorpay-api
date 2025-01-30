@@ -6,3 +6,4 @@ PyJWT
 requests
 gunicorn
 psycopg2-binary
+flask_jwt_extended
