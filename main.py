@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
-from flask_cors import CORS  # Importa Flask-CORS
+from flask_cors import CORS
 import jwt
 import datetime
 from functools import wraps
@@ -11,9 +11,6 @@ import string
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import asyncio
-from bson import ObjectId
-from fastapi import Request, HTTPException
 import threading
 import time
 
