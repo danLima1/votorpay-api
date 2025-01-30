@@ -716,21 +716,27 @@ def solicitar_cartao(current_user):
 
         # Agendar análise automática após 30 minutos
         def analisar_cartao():
-            with app.app_context():
-                time.sleep(1800)  # 30 minutos
-                solicitacao = CartaoCredito.query.filter_by(
-                    user_id=current_user.id,
-                    status="em_analise"
-                ).first()
+            try:
+                with app.app_context():
+                    time.sleep(1800)  # 30 minutos
+                    solicitacao = CartaoCredito.query.filter_by(
+                        user_id=current_user.id,
+                        status="em_analise"
+                    ).first()
 
-                if solicitacao:
-                    # 50% de chance de aprovação
-                    aprovado = random.choice([True, False])
-                    solicitacao.status = "aprovado" if aprovado else "reprovado"
-                    solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
-                    db.session.commit()
+                    if solicitacao:
+                        # 50% de chance de aprovação
+                        aprovado = random.choice([True, False])
+                        solicitacao.status = "aprovado" if aprovado else "reprovado"
+                        solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
+                        db.session.commit()
+                        print(f"Análise concluída para usuário {current_user.id}: {solicitacao.status}")
+            except Exception as e:
+                print(f"Erro na análise automática: {str(e)}")
+                db.session.rollback()
 
         thread = threading.Thread(target=analisar_cartao)
+        thread.daemon = True  # Garantir que a thread seja encerrada quando o programa principal terminar
         thread.start()
 
         return jsonify({
@@ -746,9 +752,6 @@ def solicitar_cartao(current_user):
 @app.route('/status-cartao', methods=['GET', 'OPTIONS'])
 @token_requerido
 def status_cartao(current_user):
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-        
     try:
         # Buscar status da solicitação
         solicitacao = CartaoCredito.query.filter_by(user_id=current_user.id).first()
@@ -762,12 +765,20 @@ def status_cartao(current_user):
             tempo_decorrido = datetime.datetime.now(datetime.UTC) - solicitacao.data_solicitacao
             tempo_restante = max(0, 1800 - tempo_decorrido.total_seconds())  # 1800 segundos = 30 minutos
 
+            # Se o tempo acabou mas o status não foi atualizado, forçar a análise
+            if tempo_restante <= 0:
+                aprovado = random.choice([True, False])
+                solicitacao.status = "aprovado" if aprovado else "reprovado"
+                solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
+                db.session.commit()
+                print(f"Análise forçada para usuário {current_user.id}: {solicitacao.status}")
+
         return jsonify({
             "tem_solicitacao": True,
             "status": solicitacao.status,
             "tempo_restante": tempo_restante,
-            "data_solicitacao": solicitacao.data_solicitacao,
-            "data_atualizacao": solicitacao.data_atualizacao
+            "data_solicitacao": solicitacao.data_solicitacao.isoformat(),
+            "data_atualizacao": solicitacao.data_atualizacao.isoformat()
         }), 200
 
     except Exception as e:
