@@ -19,15 +19,14 @@ app = Flask(__name__)
 # Configuração do CORS mais permissiva
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://127.0.0.1:5500", "https://votopayad.vercel.app"],
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "expose_headers": ["Content-Type", "Authorization"],
+        "origins": "*",
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["*"],
+        "expose_headers": ["*"],
         "supports_credentials": True,
         "max_age": 600
     }
 })
-
 # Middleware para tratar preflight requests
 @app.before_request
 def handle_preflight():
