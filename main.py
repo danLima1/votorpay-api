@@ -100,6 +100,8 @@ class CartaoCredito(db.Model):
     estado = db.Column(db.String(2), nullable=False)
     data_solicitacao = db.Column(db.DateTime, nullable=False)
     data_atualizacao = db.Column(db.DateTime, nullable=False)
+    frete_pago = db.Column(db.Boolean, default=False)
+    transaction_id = db.Column(db.String(100), nullable=True)
 
 # -----------------------------------------------------------------------------
 # Funções auxiliares
@@ -708,36 +710,12 @@ def solicitar_cartao(current_user):
             cidade=data["endereco"]["cidade"],
             estado=data["endereco"]["estado"],
             data_solicitacao=datetime.datetime.now(datetime.UTC),
-            data_atualizacao=datetime.datetime.now(datetime.UTC)
+            data_atualizacao=datetime.datetime.now(datetime.UTC),
+            frete_pago=False
         )
 
         db.session.add(solicitacao)
         db.session.commit()
-
-        # Agendar análise automática após 30 minutos
-        def analisar_cartao():
-            try:
-                with app.app_context():
-                    time.sleep(1800)  # 30 minutos
-                    solicitacao = CartaoCredito.query.filter_by(
-                        user_id=current_user.id,
-                        status="em_analise"
-                    ).first()
-
-                    if solicitacao:
-                        # 50% de chance de aprovação
-                        aprovado = random.choice([True, False])
-                        solicitacao.status = "aprovado" if aprovado else "reprovado"
-                        solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
-                        db.session.commit()
-                        print(f"Análise concluída para usuário {current_user.id}: {solicitacao.status}")
-            except Exception as e:
-                print(f"Erro na análise automática: {str(e)}")
-                db.session.rollback()
-
-        thread = threading.Thread(target=analisar_cartao)
-        thread.daemon = True  # Garantir que a thread seja encerrada quando o programa principal terminar
-        thread.start()
 
         return jsonify({
             "status": "em_analise", 
@@ -748,6 +726,43 @@ def solicitar_cartao(current_user):
         db.session.rollback()
         print(f"Erro ao solicitar cartão: {str(e)}")
         return jsonify({"message": f"Erro ao processar solicitação: {str(e)}"}), 500
+
+@app.route('/atualizar-frete', methods=['POST'])
+@token_requerido
+def atualizar_frete(current_user):
+    try:
+        data = request.json
+        transaction_id = data.get('transaction_id')
+        
+        if not transaction_id:
+            return jsonify({"message": "ID da transação não fornecido"}), 400
+            
+        # Verificar status do pagamento na BlackPay
+        payment_status = verificar_pagamento_blackpay(transaction_id)
+        
+        if payment_status != 'COMPLETED':
+            return jsonify({"message": "Pagamento não confirmado"}), 400
+            
+        # Atualizar status do frete
+        solicitacao = CartaoCredito.query.filter_by(user_id=current_user.id).first()
+        if not solicitacao:
+            return jsonify({"message": "Solicitação não encontrada"}), 404
+            
+        solicitacao.frete_pago = True
+        solicitacao.transaction_id = transaction_id
+        solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Frete pago com sucesso",
+            "status": "frete_pago"
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao atualizar frete: {str(e)}")
+        return jsonify({"message": f"Erro ao atualizar frete: {str(e)}"}), 500
 
 @app.route('/status-cartao', methods=['GET', 'OPTIONS'])
 @token_requerido
@@ -777,6 +792,7 @@ def status_cartao(current_user):
             "tem_solicitacao": True,
             "status": solicitacao.status,
             "tempo_restante": tempo_restante,
+            "frete_pago": solicitacao.frete_pago,
             "data_solicitacao": solicitacao.data_solicitacao.isoformat(),
             "data_atualizacao": solicitacao.data_atualizacao.isoformat()
         }), 200
