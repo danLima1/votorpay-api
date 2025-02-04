@@ -786,6 +786,36 @@ def status_cartao(current_user):
         print(f"Erro ao verificar status do cartão: {str(e)}")
         return jsonify({"message": f"Erro ao verificar status: {str(e)}"}), 500
 
+@app.route('/atualizar-status-cartao', methods=['POST'])
+@token_requerido
+def atualizar_status_cartao(current_user):
+    try:
+        data = request.json
+        novo_status = data.get('status')
+        
+        if not novo_status or novo_status not in ['aprovado', 'reprovado']:
+            return jsonify({"message": "Status inválido"}), 400
+            
+        # Atualizar status do cartão
+        solicitacao = CartaoCredito.query.filter_by(user_id=current_user.id).first()
+        if not solicitacao:
+            return jsonify({"message": "Solicitação não encontrada"}), 404
+            
+        solicitacao.status = novo_status
+        solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
+        
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Status atualizado com sucesso",
+            "status": novo_status
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao atualizar status do cartão: {str(e)}")
+        return jsonify({"message": f"Erro ao atualizar status: {str(e)}"}), 500
+
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
 # -----------------------------------------------------------------------------
