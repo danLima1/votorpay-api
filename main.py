@@ -27,6 +27,7 @@ CORS(app, resources={
         "max_age": 600
     }
 })
+
 # Middleware para tratar preflight requests
 @app.before_request
 def handle_preflight():
@@ -773,24 +774,9 @@ def status_cartao(current_user):
         if not solicitacao:
             return jsonify({"tem_solicitacao": False}), 200
 
-        # Calcular tempo restante se estiver em análise
-        tempo_restante = None
-        if solicitacao.status == "em_analise":
-            tempo_decorrido = datetime.datetime.now(datetime.UTC) - solicitacao.data_solicitacao
-            tempo_restante = max(0, 1800 - tempo_decorrido.total_seconds())  # 1800 segundos = 30 minutos
-
-            # Se o tempo acabou mas o status não foi atualizado, forçar a análise
-            if tempo_restante <= 0:
-                aprovado = random.choice([True, False])
-                solicitacao.status = "aprovado" if aprovado else "reprovado"
-                solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
-                db.session.commit()
-                print(f"Análise forçada para usuário {current_user.id}: {solicitacao.status}")
-
         return jsonify({
             "tem_solicitacao": True,
             "status": solicitacao.status,
-            "tempo_restante": tempo_restante,
             "frete_pago": solicitacao.frete_pago,
             "data_solicitacao": solicitacao.data_solicitacao.isoformat(),
             "data_atualizacao": solicitacao.data_atualizacao.isoformat()
