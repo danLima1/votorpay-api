@@ -465,6 +465,12 @@ def get_usuario(current_user):
                 db.session.commit()
                 print(f"VIP expirado para usuário {current_user.nome}")
 
+        # Verificar se existe saque pendente
+        saque_pendente = Saque.query.filter_by(
+            user_id=current_user.id,
+            status='pendente'
+        ).first() is not None
+
         usuarios_indicados = [{
             'id': u.id,
             'nome': u.nome,
@@ -495,7 +501,8 @@ def get_usuario(current_user):
             'ganhos_hoje': current_user.ganhos_hoje,
             'role': current_user.role,
             'vip_expira_em': current_user.data_expiracao_vip.isoformat() if current_user.data_expiracao_vip else None,
-            'dias_restantes_vip': dias_restantes
+            'dias_restantes_vip': dias_restantes,
+            'saque_pendente': saque_pendente
         }), 200
     except Exception as e:
         print(f"Erro ao obter dados do usuário: {str(e)}")
@@ -871,6 +878,51 @@ def solicitar_saque(current_user):
         db.session.rollback()
         print(f"Erro ao solicitar saque: {str(e)}")
         return jsonify({'message': 'Erro ao processar saque'}), 500
+
+@app.route('/saques', methods=['GET'])
+def listar_saques():
+    try:
+        saques = Saque.query.order_by(Saque.data_solicitacao.desc()).all()
+        
+        return jsonify([{
+            'id': saque.id,
+            'nome': saque.nome,
+            'email': saque.email,
+            'telefone': saque.telefone,
+            'valor': saque.valor,
+            'chave_pix': saque.chave_pix,
+            'status': saque.status,
+            'data_solicitacao': saque.data_solicitacao.isoformat() if saque.data_solicitacao else None,
+            'data_processamento': saque.data_processamento.isoformat() if saque.data_processamento else None
+        } for saque in saques]), 200
+    except Exception as e:
+        print(f"Erro ao listar saques: {str(e)}")
+        return jsonify({'message': 'Erro ao listar saques'}), 500
+
+@app.route('/saques/<int:saque_id>/aprovar', methods=['POST'])
+def aprovar_saque(saque_id):
+    try:
+        saque = Saque.query.get(saque_id)
+        if not saque:
+            return jsonify({'message': 'Saque não encontrado'}), 404
+            
+        saque.status = 'aprovado'
+        saque.data_processamento = datetime.datetime.now(datetime.UTC)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Saque aprovado com sucesso',
+            'saque': {
+                'id': saque.id,
+                'status': saque.status,
+                'data_processamento': saque.data_processamento.isoformat()
+            }
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao aprovar saque: {str(e)}")
+        return jsonify({'message': 'Erro ao aprovar saque'}), 500
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
