@@ -103,6 +103,19 @@ class CartaoCredito(db.Model):
     frete_pago = db.Column(db.Boolean, default=False)
     transaction_id = db.Column(db.String(100), nullable=True)
 
+class Saque(db.Model):
+    __tablename__ = 'saques'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)
+    valor = db.Column(db.Float, nullable=False)
+    chave_pix = db.Column(db.String(100), nullable=False)
+    nome = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(120), nullable=False)
+    telefone = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), default='pendente')
+    data_solicitacao = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+    data_processamento = db.Column(db.DateTime, nullable=True)
+
 # -----------------------------------------------------------------------------
 # Funções auxiliares
 # -----------------------------------------------------------------------------
@@ -815,6 +828,49 @@ def atualizar_status_cartao(current_user):
         db.session.rollback()
         print(f"Erro ao atualizar status do cartão: {str(e)}")
         return jsonify({"message": f"Erro ao atualizar status: {str(e)}"}), 500
+
+@app.route('/solicitar-saque', methods=['POST'])
+@token_requerido
+def solicitar_saque(current_user):
+    try:
+        data = request.json
+        valor = float(data.get('valor', 0))
+        chave_pix = data.get('chave_pix')
+
+        if not chave_pix or valor <= 0:
+            return jsonify({'message': 'Dados inválidos'}), 400
+
+        if valor > 10:
+            return jsonify({'message': 'Valor máximo para saque é R$ 10,00'}), 400
+
+        if valor > current_user.saldo:
+            return jsonify({'message': 'Saldo insuficiente'}), 400
+
+        # Criar novo saque
+        novo_saque = Saque(
+            user_id=current_user.id,
+            valor=valor,
+            chave_pix=chave_pix,
+            nome=current_user.nome,
+            email=current_user.email,
+            telefone=current_user.numero_celular
+        )
+
+        # Deduzir do saldo do usuário
+        current_user.saldo -= valor
+
+        db.session.add(novo_saque)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Saque solicitado com sucesso',
+            'status': 'pendente'
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao solicitar saque: {str(e)}")
+        return jsonify({'message': 'Erro ao processar saque'}), 500
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
