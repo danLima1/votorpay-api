@@ -252,18 +252,13 @@ def enviar_email_reset_senha(email, token):
 
 def verificar_pagamento_blackpay(transaction_id):
     try:
-        # Configurações da BlackPay
-        publicKey = 'votopayoficial_zt03ro1mjxej5tx6'
-        secretKey = '7436pm952nxdcmq0motadjryc4k2guk7ohlb683460nceepdjmgq08nr5i6y07qq'
-        
         # URL da API
-        url = f"https://app.blackpay.io/api/v1/gateway/transactions?id={transaction_id}"
+        url = f"https://pay.bullspay.net/api/v1/transaction.getPayment?id={transaction_id}"
         
         # Headers
         headers = {
             'Accept': 'application/json',
-            'x-public-key': publicKey,
-            'x-secret-key': secretKey
+            'Authorization': 'c71f22f7-e873-4712-853c-7cd44b4772c5'
         }
         
         # Fazer requisição
@@ -272,13 +267,16 @@ def verificar_pagamento_blackpay(transaction_id):
         
         # Parse da resposta
         payment_data = response.json()
-        print(f"Resposta da BlackPay: {payment_data}")
+        print(f"Resposta da BullsPay: {payment_data}")
         
         return payment_data.get('status', 'UNKNOWN')
         
     except requests.exceptions.RequestException as e:
-        print(f"Erro na requisição à BlackPay: {str(e)}")
+        print(f"Erro na requisição à BullsPay: {str(e)}")
         raise Exception(f"Erro ao verificar pagamento: {str(e)}")
+    except Exception as e:
+        print(f"Erro ao verificar pagamento: {str(e)}")
+        raise
 
 def admin_token_requerido(f):
     @wraps(f)
@@ -793,13 +791,17 @@ def atualizar_frete(current_user):
                 db.session.commit()
                 
                 return jsonify({'message': 'Frete pago com sucesso'}), 200
-
+            else:
+                return jsonify({'message': f'Status do pagamento inválido: {payment_status}'}), 400
+                
         except Exception as e:
             print(f"Erro ao verificar pagamento na BlackPay: {str(e)}")
+            db.session.rollback()
             return jsonify({'message': 'Erro ao verificar pagamento'}), 500
             
     except Exception as e:
         print('Erro ao atualizar frete:', str(e))
+        db.session.rollback()
         return jsonify({'message': str(e)}), 500
 
 @app.route('/status-cartao', methods=['GET', 'OPTIONS'])
