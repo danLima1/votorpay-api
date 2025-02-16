@@ -252,18 +252,16 @@ def enviar_email_reset_senha(email, token):
 
 def verificar_pagamento_blackpay(transaction_id):
     try:
-        # Configurações da BlackPay
-        publicKey = 'votopayoficial_zt03ro1mjxej5tx6'
-        secretKey = '7436pm952nxdcmq0motadjryc4k2guk7ohlb683460nceepdjmgq08nr5i6y07qq'
+        # Configurações da BullsPay
+        secretKey = 'c71f22f7-e873-4712-853c-7cd44b4772c5'
         
         # URL da API
-        url = f"https://app.blackpay.io/api/v1/gateway/transactions?id={transaction_id}"
+        url = "https://pay.bullspay.net/api/v1/transaction.getAllPayments"
         
         # Headers
         headers = {
             'Accept': 'application/json',
-            'x-public-key': publicKey,
-            'x-secret-key': secretKey
+            'Authorization': secretKey
         }
         
         # Fazer requisição
@@ -271,13 +269,20 @@ def verificar_pagamento_blackpay(transaction_id):
         response.raise_for_status()  # Lança exceção para status codes de erro
         
         # Parse da resposta
-        payment_data = response.json()
-        print(f"Resposta da BlackPay: {payment_data}")
+        payments = response.json()
         
-        return payment_data.get('status', 'UNKNOWN')
+        # Procurar a transação específica
+        transaction = next((payment for payment in payments if payment['id'] == transaction_id), None)
+        
+        if not transaction:
+            print(f"Transação {transaction_id} não encontrada")
+            return 'PENDING'
+            
+        print(f"Status da transação {transaction_id}: {transaction['status']}")
+        return transaction['status']
         
     except requests.exceptions.RequestException as e:
-        print(f"Erro na requisição à BlackPay: {str(e)}")
+        print(f"Erro na requisição à BullsPay: {str(e)}")
         raise Exception(f"Erro ao verificar pagamento: {str(e)}")
 
 def admin_token_requerido(f):
@@ -639,7 +644,7 @@ def atualizar_vip(current_user):
         if not transaction_id or not vip_type:
             return jsonify({'status': 'error', 'message': 'Dados incompletos'}), 400
             
-        # Verificar status do pagamento na BlackPay
+        # Verificar status do pagamento na BullsPay
         try:
             payment_status = verificar_pagamento_blackpay(transaction_id)
             print(f"Status do pagamento: {payment_status}")
@@ -648,7 +653,7 @@ def atualizar_vip(current_user):
                 return jsonify({'status': 'error', 'message': f'Status do pagamento inválido: {payment_status}'}), 400
                 
         except Exception as e:
-            print(f"Erro ao verificar pagamento na BlackPay: {str(e)}")
+            print(f"Erro ao verificar pagamento na BullsPay: {str(e)}")
             return jsonify({'status': 'error', 'message': 'Erro ao verificar pagamento'}), 500
             
         # Atualizar VIP do usuário
@@ -682,18 +687,18 @@ def blackpay_webhook():
         transaction_data = request.json
         
         # Verificar se é uma notificação de pagamento
-        if transaction_data.get('event') == 'TRANSACTION_PAID':
+        if transaction_data.get('status') == 'COMPLETED':
             # Extrair dados necessários
-            transaction_id = transaction_data.get('transaction', {}).get('id')
-            client_data = transaction_data.get('client', {})
-            cpf = client_data.get('cpf')
+            transaction_id = transaction_data.get('id')
+            customer_data = transaction_data.get('customer', {})
+            cpf = customer_data.get('cpf')
             
             # Extrair tipo de VIP do nome do produto
-            order_items = transaction_data.get('orderItems', [])
-            if not order_items:
+            items = transaction_data.get('items', [])
+            if not items:
                 return jsonify({'status': 'error', 'message': 'Nenhum item no pedido'}), 400
                 
-            product_name = order_items[0].get('product', {}).get('name', '').lower()
+            product_name = items[0].get('title', '').lower()
             if 'vip1' in product_name:
                 vip_type = 'vip1'
             elif 'vip2' in product_name:
@@ -793,7 +798,7 @@ def atualizar_frete(current_user):
         if not transaction_id:
             return jsonify({"message": "ID da transação não fornecido"}), 400
             
-        # Verificar status do pagamento na BlackPay
+        # Verificar status do pagamento na BullsPay
         payment_status = verificar_pagamento_blackpay(transaction_id)
         
         if payment_status != 'COMPLETED':
@@ -1022,7 +1027,6 @@ def admin_login():
         token = jwt.encode({
             'admin_id': admin.id,
             'exp': datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
-        }, app.config['SECRET_KEY'])
         
         return jsonify({
             'message': 'Login realizado com sucesso',
