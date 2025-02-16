@@ -1033,6 +1033,29 @@ def admin_login():
         print(f"Erro no login de admin: {str(e)}")
         return jsonify({'message': 'Erro ao fazer login'}), 500
 
+@app.route('/saques/usuario/<int:user_id>', methods=['GET'])
+@token_requerido
+def listar_saques_usuario(current_user, user_id):
+    try:
+        # Verificar se o usuário está tentando acessar seus próprios saques
+        if current_user.id != user_id:
+            return jsonify({'message': 'Acesso não autorizado'}), 403
+            
+        # Buscar saques do usuário
+        saques = Saque.query.filter_by(user_id=user_id).order_by(Saque.data_solicitacao.desc()).all()
+        
+        return jsonify([{
+            'id': saque.id,
+            'valor': saque.valor,
+            'chave_pix': saque.chave_pix,
+            'status': saque.status,
+            'data_solicitacao': saque.data_solicitacao.isoformat() if saque.data_solicitacao else None,
+            'data_processamento': saque.data_processamento.isoformat() if saque.data_processamento else None
+        } for saque in saques]), 200
+    except Exception as e:
+        print(f"Erro ao listar saques do usuário: {str(e)}")
+        return jsonify({'message': 'Erro ao listar saques'}), 500
+
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
 # -----------------------------------------------------------------------------
