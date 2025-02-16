@@ -116,6 +116,13 @@ class Saque(db.Model):
     data_solicitacao = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
     data_processamento = db.Column(db.DateTime, nullable=True)
 
+class Admin(db.Model):
+    __tablename__ = 'admin'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    username = db.Column(db.String(50), unique=True, nullable=False)
+    password = db.Column(db.String(128), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+
 # -----------------------------------------------------------------------------
 # Funções auxiliares
 # -----------------------------------------------------------------------------
@@ -272,6 +279,35 @@ def verificar_pagamento_blackpay(transaction_id):
     except requests.exceptions.RequestException as e:
         print(f"Erro na requisição à BlackPay: {str(e)}")
         raise Exception(f"Erro ao verificar pagamento: {str(e)}")
+
+def admin_token_requerido(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        auth_header = request.headers.get('Authorization')
+        
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(' ')[1]
+            
+        if not token:
+            return jsonify({'message': 'Token não fornecido'}), 401
+            
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            if 'admin_id' not in data:
+                return jsonify({'message': 'Token inválido'}), 401
+                
+            current_admin = Admin.query.get(data['admin_id'])
+            if not current_admin:
+                return jsonify({'message': 'Admin não encontrado'}), 401
+                
+            return f(current_admin, *args, **kwargs)
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'Token expirado'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'message': 'Token inválido'}), 401
+            
+    return decorated
 
 # -----------------------------------------------------------------------------
 # Endpoints
@@ -880,7 +916,8 @@ def solicitar_saque(current_user):
         return jsonify({'message': 'Erro ao processar saque'}), 500
 
 @app.route('/saques', methods=['GET'])
-def listar_saques():
+@admin_token_requerido
+def listar_saques(current_admin):
     try:
         # Buscar saques com informações do usuário
         saques = db.session.query(Saque, Usuario.role).join(
@@ -904,7 +941,8 @@ def listar_saques():
         return jsonify({'message': 'Erro ao listar saques'}), 500
 
 @app.route('/saques/<int:saque_id>/aprovar', methods=['POST'])
-def aprovar_saque(saque_id):
+@admin_token_requerido
+def aprovar_saque(current_admin, saque_id):
     try:
         saque = Saque.query.get(saque_id)
         if not saque:
