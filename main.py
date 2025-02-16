@@ -882,7 +882,10 @@ def solicitar_saque(current_user):
 @app.route('/saques', methods=['GET'])
 def listar_saques():
     try:
-        saques = Saque.query.order_by(Saque.data_solicitacao.desc()).all()
+        # Buscar saques com informações do usuário
+        saques = db.session.query(Saque, Usuario.role).join(
+            Usuario, Saque.user_id == Usuario.id
+        ).order_by(Saque.data_solicitacao.desc()).all()
         
         return jsonify([{
             'id': saque.id,
@@ -892,9 +895,10 @@ def listar_saques():
             'valor': saque.valor,
             'chave_pix': saque.chave_pix,
             'status': saque.status,
+            'role': role,
             'data_solicitacao': saque.data_solicitacao.isoformat() if saque.data_solicitacao else None,
             'data_processamento': saque.data_processamento.isoformat() if saque.data_processamento else None
-        } for saque in saques]), 200
+        } for saque, role in saques]), 200
     except Exception as e:
         print(f"Erro ao listar saques: {str(e)}")
         return jsonify({'message': 'Erro ao listar saques'}), 500
