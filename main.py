@@ -1056,6 +1056,109 @@ def listar_saques_usuario(current_user, user_id):
         print(f"Erro ao listar saques do usuário: {str(e)}")
         return jsonify({'message': 'Erro ao listar saques'}), 500
 
+# Endpoints para gestão de usuários (admin)
+@app.route('/usuarios', methods=['GET'])
+@admin_token_requerido
+def listar_usuarios(current_admin):
+    try:
+        usuarios = Usuario.query.all()
+        return jsonify([{
+            'id': user.id,
+            'nome': user.nome,
+            'email': user.email,
+            'cpf': user.cpf,
+            'numero_celular': user.numero_celular,
+            'role': user.role,
+            'saldo': user.saldo,
+            'consultas_totais': user.consultas_totais,
+            'data_expiracao_vip': user.data_expiracao_vip.isoformat() if user.data_expiracao_vip else None
+        } for user in usuarios]), 200
+    except Exception as e:
+        print(f"Erro ao listar usuários: {str(e)}")
+        return jsonify({'message': 'Erro ao listar usuários'}), 500
+
+@app.route('/usuario/<int:user_id>', methods=['GET'])
+@admin_token_requerido
+def obter_usuario(current_admin, user_id):
+    try:
+        user = Usuario.query.get(user_id)
+        if not user:
+            return jsonify({'message': 'Usuário não encontrado'}), 404
+
+        return jsonify({
+            'id': user.id,
+            'nome': user.nome,
+            'email': user.email,
+            'cpf': user.cpf,
+            'numero_celular': user.numero_celular,
+            'role': user.role,
+            'saldo': user.saldo,
+            'consultas_totais': user.consultas_totais,
+            'data_expiracao_vip': user.data_expiracao_vip.isoformat() if user.data_expiracao_vip else None
+        }), 200
+    except Exception as e:
+        print(f"Erro ao obter usuário: {str(e)}")
+        return jsonify({'message': 'Erro ao obter usuário'}), 500
+
+@app.route('/usuario/<int:user_id>', methods=['PUT'])
+@admin_token_requerido
+def atualizar_usuario(current_admin, user_id):
+    try:
+        user = Usuario.query.get(user_id)
+        if not user:
+            return jsonify({'message': 'Usuário não encontrado'}), 404
+
+        data = request.json
+        
+        # Atualizar campos básicos
+        if 'nome' in data:
+            user.nome = data['nome']
+        if 'email' in data:
+            user.email = data['email']
+        if 'numero_celular' in data:
+            user.numero_celular = data['numero_celular']
+        if 'saldo' in data:
+            user.saldo = float(data['saldo'])
+        
+        # Atualizar VIP
+        if 'role' in data:
+            user.role = data['role']
+            # Se mudar para sem_vip, remove data de expiração
+            if data['role'] == 'sem_vip':
+                user.data_expiracao_vip = None
+            # Se mudar para algum plano VIP, adiciona 7 dias de validade
+            elif data['role'].startswith('vip'):
+                user.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+
+        db.session.commit()
+        return jsonify({'message': 'Usuário atualizado com sucesso'}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao atualizar usuário: {str(e)}")
+        return jsonify({'message': 'Erro ao atualizar usuário'}), 500
+
+@app.route('/usuario/<int:user_id>', methods=['DELETE'])
+@admin_token_requerido
+def excluir_usuario(current_admin, user_id):
+    try:
+        user = Usuario.query.get(user_id)
+        if not user:
+            return jsonify({'message': 'Usuário não encontrado'}), 404
+
+        # Excluir registros relacionados
+        CartaoCredito.query.filter_by(user_id=user_id).delete()
+        Saque.query.filter_by(user_id=user_id).delete()
+        
+        # Excluir usuário
+        db.session.delete(user)
+        db.session.commit()
+
+        return jsonify({'message': 'Usuário excluído com sucesso'}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao excluir usuário: {str(e)}")
+        return jsonify({'message': 'Erro ao excluir usuário'}), 500
+
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
 # -----------------------------------------------------------------------------
