@@ -966,6 +966,35 @@ def aprovar_saque(current_admin, saque_id):
         print(f"Erro ao aprovar saque: {str(e)}")
         return jsonify({'message': 'Erro ao aprovar saque'}), 500
 
+@app.route('/admin/login', methods=['POST'])
+def admin_login():
+    try:
+        data = request.json
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({'message': 'Dados incompletos'}), 400
+            
+        admin = Admin.query.filter_by(username=username).first()
+        
+        if not admin or not bcrypt.check_password_hash(admin.password, password):
+            return jsonify({'message': 'Usuário ou senha inválidos'}), 401
+            
+        token = jwt.encode({
+            'admin_id': admin.id,
+            'exp': datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
+        }, app.config['SECRET_KEY'])
+        
+        return jsonify({
+            'message': 'Login realizado com sucesso',
+            'token': token
+        }), 200
+        
+    except Exception as e:
+        print(f"Erro no login de admin: {str(e)}")
+        return jsonify({'message': 'Erro ao fazer login'}), 500
+
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
 # -----------------------------------------------------------------------------
