@@ -35,7 +35,7 @@ def handle_preflight():
         response = make_response()
         response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin", "*"))
         response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+        response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         response.headers.add("Access-Control-Allow-Credentials", "true")
         response.headers.add("Access-Control-Max-Age", "600")
         return response
@@ -682,58 +682,40 @@ def blackpay_webhook():
         transaction_data = request.json
         
         # Verificar se é uma notificação de pagamento
-        if transaction_data.get('event') == 'TRANSACTION_PAID':
-            # Extrair dados necessários
-            transaction_id = transaction_data.get('transaction', {}).get('id')
-            client_data = transaction_data.get('client', {})
-            cpf = client_data.get('cpf')
+        if transaction_data.get('status') == 'COMPLETED':
+            # Obter o ID da transação
+            transaction_id = transaction_data.get('id')
             
-            # Extrair tipo de VIP do nome do produto
-            order_items = transaction_data.get('orderItems', [])
-            if not order_items:
-                return jsonify({'status': 'error', 'message': 'Nenhum item no pedido'}), 400
-                
-            product_name = order_items[0].get('product', {}).get('name', '').lower()
-            if 'vip1' in product_name:
-                vip_type = 'vip1'
-            elif 'vip2' in product_name:
-                vip_type = 'vip2'
-            elif 'vip3' in product_name:
-                vip_type = 'vip3'
-            else:
-                return jsonify({'status': 'error', 'message': 'Tipo de VIP não identificado'}), 400
+            # Verificar se existe um cartão com esta transação
+            cartao = CartaoCredito.query.filter_by(transaction_id=transaction_id).first()
+            if cartao:
+                # Se encontrou o cartão, atualizar frete_pago para True
+                cartao.frete_pago = True
+                db.session.commit()
+                return jsonify({'message': 'Frete atualizado com sucesso'}), 200
             
-            print(f"Pagamento confirmado - Transaction ID: {transaction_id}, CPF: {cpf}, VIP Type: {vip_type}")
-            
-            if not transaction_id or not cpf:
-                print("Dados incompletos no webhook")
-                return jsonify({'status': 'error', 'message': 'Dados incompletos'}), 400
-            
-            # Encontrar usuário pelo CPF
-            usuario = Usuario.query.filter_by(cpf=cpf).first()
-            if not usuario:
-                return jsonify({'status': 'error', 'message': 'Usuário não encontrado'}), 404
-
-            # Atualizar VIP do usuário
-            usuario.role = vip_type
-            usuario.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
-            usuario.ultima_transacao_id = transaction_id
-            db.session.commit()
-            
-            print(f"VIP atualizado: Usuário {usuario.nome} (CPF: {usuario.cpf}) -> {vip_type}")
-            return jsonify({
-                'status': 'success',
-                'message': 'VIP atualizado com sucesso',
-                'user_id': usuario.id,
-                'new_role': vip_type,
-                'expira_em': usuario.data_expiracao_vip.isoformat()
-            }), 200
+            # Verificar se existe um usuário com esta transação
+            usuario = Usuario.query.filter_by(ultima_transacao_id=transaction_id).first()
+            if usuario:
+                # Se encontrou o usuário, atualizar o VIP
+                vip_type = transaction_data.get('items', [{}])[0].get('title', '').lower()
+                if 'vip' in vip_type:
+                    if 'bronze' in vip_type or 'vip1' in vip_type:
+                        usuario.role = 'vip1'
+                    elif 'prata' in vip_type or 'vip2' in vip_type:
+                        usuario.role = 'vip2'
+                    elif 'diamond' in vip_type or 'vip3' in vip_type:
+                        usuario.role = 'vip3'
+                    
+                    # Definir data de expiração (7 dias)
+                    usuario.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+                    db.session.commit()
+                    return jsonify({'message': 'VIP atualizado com sucesso'}), 200
         
-        return jsonify({'status': 'success'}), 200
-        
+        return jsonify({'message': 'Notificação processada'}), 200
     except Exception as e:
-        print(f"Erro no webhook: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        print('Erro no webhook:', str(e))
+        return jsonify({'error': str(e)}), 500
 
 # Ajuste nos endpoints do cartão
 @app.route('/solicitar-cartao', methods=['POST', 'OPTIONS'])
@@ -784,41 +766,28 @@ def solicitar_cartao(current_user):
         return jsonify({"message": f"Erro ao processar solicitação: {str(e)}"}), 500
 
 @app.route('/atualizar-frete', methods=['POST'])
-@token_requerido
 def atualizar_frete(current_user):
     try:
         data = request.json
         transaction_id = data.get('transaction_id')
         
         if not transaction_id:
-            return jsonify({"message": "ID da transação não fornecido"}), 400
+            return jsonify({'message': 'ID da transação não fornecido'}), 400
             
-        # Verificar status do pagamento na BlackPay
-        payment_status = verificar_pagamento_blackpay(transaction_id)
+        # Buscar solicitação de cartão do usuário
+        cartao = CartaoCredito.query.filter_by(user_id=current_user.id).first()
         
-        if payment_status != 'COMPLETED':
-            return jsonify({"message": "Pagamento não confirmado"}), 400
+        if not cartao:
+            return jsonify({'message': 'Nenhuma solicitação de cartão encontrada'}), 404
             
-        # Atualizar status do frete
-        solicitacao = CartaoCredito.query.filter_by(user_id=current_user.id).first()
-        if not solicitacao:
-            return jsonify({"message": "Solicitação não encontrada"}), 404
-            
-        solicitacao.frete_pago = True
-        solicitacao.transaction_id = transaction_id
-        solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
-        
+        # Atualizar transaction_id
+        cartao.transaction_id = transaction_id
         db.session.commit()
         
-        return jsonify({
-            "message": "Frete pago com sucesso",
-            "status": "frete_pago"
-        }), 200
-        
+        return jsonify({'message': 'Transação registrada com sucesso'}), 200
     except Exception as e:
-        db.session.rollback()
-        print(f"Erro ao atualizar frete: {str(e)}")
-        return jsonify({"message": f"Erro ao atualizar frete: {str(e)}"}), 500
+        print('Erro ao atualizar frete:', str(e))
+        return jsonify({'message': str(e)}), 500
 
 @app.route('/status-cartao', methods=['GET', 'OPTIONS'])
 @token_requerido
@@ -1158,36 +1127,6 @@ def excluir_usuario(current_admin, user_id):
         db.session.rollback()
         print(f"Erro ao excluir usuário: {str(e)}")
         return jsonify({'message': 'Erro ao excluir usuário'}), 500
-
-@app.route('/cartao/<int:user_id>/status', methods=['PUT'])
-@admin_token_requerido
-def atualizar_status_cartao_admin(current_admin, user_id):
-    try:
-        data = request.json
-        novo_status = data.get('status')
-        
-        if not novo_status or novo_status not in ['aprovado', 'reprovado']:
-            return jsonify({"message": "Status inválido"}), 400
-            
-        # Atualizar status do cartão
-        solicitacao = CartaoCredito.query.filter_by(user_id=user_id).first()
-        if not solicitacao:
-            return jsonify({"message": "Solicitação não encontrada"}), 404
-            
-        solicitacao.status = novo_status
-        solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
-        
-        db.session.commit()
-        
-        return jsonify({
-            "message": "Status atualizado com sucesso",
-            "status": novo_status
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        print(f"Erro ao atualizar status do cartão: {str(e)}")
-        return jsonify({"message": f"Erro ao atualizar status: {str(e)}"}), 500
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
