@@ -948,6 +948,9 @@ def aprovar_saque(current_admin, saque_id):
         if not saque:
             return jsonify({'message': 'Saque não encontrado'}), 404
             
+        if saque.status != 'pendente':
+            return jsonify({'message': 'Este saque não está pendente'}), 400
+            
         saque.status = 'aprovado'
         saque.data_processamento = datetime.datetime.now(datetime.UTC)
         
@@ -965,6 +968,41 @@ def aprovar_saque(current_admin, saque_id):
         db.session.rollback()
         print(f"Erro ao aprovar saque: {str(e)}")
         return jsonify({'message': 'Erro ao aprovar saque'}), 500
+
+@app.route('/saques/<int:saque_id>/recusar', methods=['POST'])
+@admin_token_requerido
+def recusar_saque(current_admin, saque_id):
+    try:
+        saque = Saque.query.get(saque_id)
+        if not saque:
+            return jsonify({'message': 'Saque não encontrado'}), 404
+            
+        if saque.status != 'pendente':
+            return jsonify({'message': 'Este saque não está pendente'}), 400
+            
+        # Atualizar status do saque
+        saque.status = 'recusado'
+        saque.data_processamento = datetime.datetime.now(datetime.UTC)
+        
+        # Devolver o valor ao saldo do usuário
+        usuario = Usuario.query.get(saque.user_id)
+        if usuario:
+            usuario.saldo += saque.valor
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Saque recusado com sucesso',
+            'saque': {
+                'id': saque.id,
+                'status': saque.status,
+                'data_processamento': saque.data_processamento.isoformat()
+            }
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao recusar saque: {str(e)}")
+        return jsonify({'message': 'Erro ao recusar saque'}), 500
 
 @app.route('/admin/login', methods=['POST'])
 def admin_login():
