@@ -682,7 +682,7 @@ def blackpay_webhook():
         transaction_data = request.json
         
         # Verificar se é uma notificação de pagamento
-        if transaction_data.get('status') == 'COMPLETED':
+        if transaction_data.get('status') in ['COMPLETED', 'APPROVED']:
             # Obter o ID da transação
             transaction_id = transaction_data.get('id')
             
@@ -766,6 +766,7 @@ def solicitar_cartao(current_user):
         return jsonify({"message": f"Erro ao processar solicitação: {str(e)}"}), 500
 
 @app.route('/atualizar-frete', methods=['POST'])
+@token_requerido
 def atualizar_frete(current_user):
     try:
         data = request.json
@@ -780,11 +781,23 @@ def atualizar_frete(current_user):
         if not cartao:
             return jsonify({'message': 'Nenhuma solicitação de cartão encontrada'}), 404
             
-        # Atualizar transaction_id
-        cartao.transaction_id = transaction_id
-        db.session.commit()
-        
-        return jsonify({'message': 'Transação registrada com sucesso'}), 200
+        # Verificar status do pagamento na BlackPay
+        try:
+            payment_status = verificar_pagamento_blackpay(transaction_id)
+            print(f"Status do pagamento do frete: {payment_status}")
+            
+            if payment_status in ['COMPLETED', 'APPROVED']:
+                # Atualizar transaction_id e frete_pago
+                cartao.transaction_id = transaction_id
+                cartao.frete_pago = True
+                db.session.commit()
+                
+                return jsonify({'message': 'Frete pago com sucesso'}), 200
+
+        except Exception as e:
+            print(f"Erro ao verificar pagamento na BlackPay: {str(e)}")
+            return jsonify({'message': 'Erro ao verificar pagamento'}), 500
+            
     except Exception as e:
         print('Erro ao atualizar frete:', str(e))
         return jsonify({'message': str(e)}), 500
