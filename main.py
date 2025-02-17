@@ -35,7 +35,7 @@ def handle_preflight():
         response = make_response()
         response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin", "*"))
         response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+        response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         response.headers.add("Access-Control-Allow-Credentials", "true")
         response.headers.add("Access-Control-Max-Age", "600")
         return response
@@ -102,6 +102,7 @@ class CartaoCredito(db.Model):
     data_atualizacao = db.Column(db.DateTime, nullable=False)
     frete_pago = db.Column(db.Boolean, default=False)
     transaction_id = db.Column(db.String(100), nullable=True)
+    card_image_url = db.Column(db.String(255), nullable=True)
 
 class Saque(db.Model):
     __tablename__ = 'saques'
@@ -819,7 +820,8 @@ def status_cartao(current_user):
             "status": solicitacao.status,
             "frete_pago": solicitacao.frete_pago,
             "data_solicitacao": solicitacao.data_solicitacao.isoformat(),
-            "data_atualizacao": solicitacao.data_atualizacao.isoformat()
+            "data_atualizacao": solicitacao.data_atualizacao.isoformat(),
+            "card_image_url": solicitacao.card_image_url if solicitacao.status == 'aprovado' else None
         }), 200
 
     except Exception as e:
@@ -844,11 +846,46 @@ def atualizar_status_cartao(current_user):
         solicitacao.status = novo_status
         solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
         
+        # Se o cartão foi aprovado, gerar a imagem personalizada
+        if novo_status == 'aprovado':
+            try:
+                # Buscar dados do usuário
+                usuario = Usuario.query.get(current_user.id)
+                if not usuario:
+                    raise Exception("Usuário não encontrado")
+                
+                # Separar nome completo em primeiro e último nome
+                nomes = usuario.nome.split()
+                primeiro_nome = nomes[0]
+                ultimo_nome = nomes[-1] if len(nomes) > 1 else ""
+                
+                # Chamar API para gerar cartão
+                response = requests.post(
+                    'https://testeimg-08267cb26565.herokuapp.com/gerar-cartao',
+                    json={
+                        'primeiroNome': primeiro_nome,
+                        'ultimoNome': ultimo_nome
+                    }
+                )
+                
+                if response.ok:
+                    card_data = response.json()
+                    if card_data.get('success') and card_data.get('imageUrl'):
+                        solicitacao.card_image_url = card_data['imageUrl']
+                    else:
+                        solicitacao.card_image_url = 'cartaov1.png'
+                else:
+                    solicitacao.card_image_url = 'cartaov1.png'
+            except Exception as e:
+                print(f"Erro ao gerar imagem do cartão: {str(e)}")
+                solicitacao.card_image_url = 'cartaov1.png'
+        
         db.session.commit()
         
         return jsonify({
             "message": "Status atualizado com sucesso",
-            "status": novo_status
+            "status": novo_status,
+            "card_image_url": solicitacao.card_image_url if novo_status == 'aprovado' else None
         }), 200
         
     except Exception as e:
