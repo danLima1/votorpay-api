@@ -35,7 +35,7 @@ def handle_preflight():
         response = make_response()
         response.headers.add("Access-Control-Allow-Origin", request.headers.get("Origin", "*"))
         response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
-        response.headers.add("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
         response.headers.add("Access-Control-Allow-Credentials", "true")
         response.headers.add("Access-Control-Max-Age", "600")
         return response
