@@ -114,7 +114,7 @@ class Saque(db.Model):
     email = db.Column(db.String(120), nullable=False)
     telefone = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), default='pendente')
-    data_solicitacao = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+    data_solicitacao = db.Column(db.DateTime, default=datetime.datetime.now(datetime.timezone.utc))
     data_processamento = db.Column(db.DateTime, nullable=True)
 
 class Admin(db.Model):
@@ -122,7 +122,7 @@ class Admin(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password = db.Column(db.String(128), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now(datetime.timezone.utc))
 
 # -----------------------------------------------------------------------------
 # Funções auxiliares
@@ -168,7 +168,7 @@ def token_requerido(f):
 def gerar_token(usuario):
     payload = {
         'id': usuario.id,
-        'exp': datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=24)
+        'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24)
     }
     token = jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
     return token
@@ -191,12 +191,12 @@ def verificar_limite_diario(usuario):
             db.session.commit()
 
         # Verificar se o VIP expirou
-        agora = datetime.datetime.now(datetime.UTC)
+        agora = datetime.datetime.now(datetime.timezone.utc)
         if usuario.role != 'sem_vip' and usuario.data_expiracao_vip:
             # Garantir que a data de expiração tenha timezone
             data_expiracao = usuario.data_expiracao_vip
             if data_expiracao.tzinfo is None:
-                data_expiracao = data_expiracao.replace(tzinfo=datetime.UTC)
+                data_expiracao = data_expiracao.replace(tzinfo=datetime.timezone.utc)
             
             if data_expiracao < agora:
                 usuario.role = 'sem_vip'
@@ -379,7 +379,7 @@ def login():
         if usuario and bcrypt.check_password_hash(usuario.senha, senha):
             token = jwt.encode({
                 'id': usuario.id,
-                'exp': datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
+                'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
             }, app.config['SECRET_KEY'], algorithm='HS256')
             
             print(f"Token gerado para usuário {usuario.nome} (CPF: {usuario.cpf})")
@@ -430,11 +430,12 @@ def consulta(current_user):
                 'vip3': 100
             }
 
+            
             ganhos_por_consulta = {
-                'sem_vip': 1.0,
-                'vip1': 1.75,
-                'vip2': 2.50,
-                'vip3': 5.0
+                'sem_vip': 10,
+                'vip1': 12.75,
+                'vip2': 20.50,
+                'vip3': 25
             }
 
             limite_diario = limites_diarios.get(current_user.role, 10)
@@ -487,12 +488,12 @@ def get_usuario(current_user):
         print("Headers recebidos:", dict(request.headers))
         
         # Verificar se o VIP expirou
-        agora = datetime.datetime.now(datetime.UTC)
+        agora = datetime.datetime.now(datetime.timezone.utc)
         if current_user.role != 'sem_vip' and current_user.data_expiracao_vip:
             # Garantir que a data de expiração tenha timezone
             data_expiracao = current_user.data_expiracao_vip
             if data_expiracao.tzinfo is None:
-                data_expiracao = data_expiracao.replace(tzinfo=datetime.UTC)
+                data_expiracao = data_expiracao.replace(tzinfo=datetime.timezone.utc)
                 
             if data_expiracao < agora:
                 current_user.role = 'sem_vip'
@@ -517,7 +518,7 @@ def get_usuario(current_user):
         if current_user.data_expiracao_vip:
             data_expiracao = current_user.data_expiracao_vip
             if data_expiracao.tzinfo is None:
-                data_expiracao = data_expiracao.replace(tzinfo=datetime.UTC)
+                data_expiracao = data_expiracao.replace(tzinfo=datetime.timezone.utc)
             if data_expiracao > agora:
                 dias_restantes = (data_expiracao - agora).days
 
@@ -581,7 +582,7 @@ def esqueci_senha():
     
     # Salvar token e data de expiração
     usuario.reset_token = token
-    usuario.reset_token_expiracao = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+    usuario.reset_token_expiracao = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
     
     try:
         db.session.commit()
@@ -607,8 +608,8 @@ def reset_senha():
         return jsonify({'message': 'Token inválido.'}), 400
 
     # Verificar se o token expirou
-    agora = datetime.datetime.now(datetime.UTC)
-    if not usuario.reset_token_expiracao or usuario.reset_token_expiracao.replace(tzinfo=datetime.UTC) < agora:
+    agora = datetime.datetime.now(datetime.timezone.utc)
+    if not usuario.reset_token_expiracao or usuario.reset_token_expiracao.replace(tzinfo=datetime.timezone.utc) < agora:
         return jsonify({'message': 'Token expirado.'}), 400
 
     # Atualizar senha
@@ -653,7 +654,7 @@ def atualizar_vip(current_user):
         # Atualizar VIP do usuário
         if vip_type in ['vip1', 'vip2', 'vip3']:
             current_user.role = vip_type
-            current_user.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+            current_user.data_expiracao_vip = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
             current_user.ultima_transacao_id = transaction_id
             
             db.session.commit()
@@ -707,7 +708,7 @@ def blackpay_webhook():
                         usuario.role = 'vip3'
                     
                     # Definir data de expiração (7 dias)
-                    usuario.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+                    usuario.data_expiracao_vip = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
                     db.session.commit()
                     return jsonify({'message': 'VIP atualizado com sucesso'}), 200
         
@@ -746,8 +747,8 @@ def solicitar_cartao(current_user):
             complemento=data["endereco"]["complemento"],
             cidade=data["endereco"]["cidade"],
             estado=data["endereco"]["estado"],
-            data_solicitacao=datetime.datetime.now(datetime.UTC),
-            data_atualizacao=datetime.datetime.now(datetime.UTC),
+            data_solicitacao=datetime.datetime.now(datetime.timezone.utc),
+            data_atualizacao=datetime.datetime.now(datetime.timezone.utc),
             frete_pago=False
         )
 
@@ -792,8 +793,6 @@ def atualizar_frete(current_user):
                 db.session.commit()
                 
                 return jsonify({'message': 'Frete pago com sucesso'}), 200
-            else:
-                return jsonify({'message': f'Status do pagamento inválido: {payment_status}'}), 400
                 
         except Exception as e:
             print(f"Erro ao verificar pagamento na BlackPay: {str(e)}")
@@ -844,7 +843,7 @@ def atualizar_status_cartao(current_user):
             return jsonify({"message": "Solicitação não encontrada"}), 404
             
         solicitacao.status = novo_status
-        solicitacao.data_atualizacao = datetime.datetime.now(datetime.UTC)
+        solicitacao.data_atualizacao = datetime.datetime.now(datetime.timezone.utc)
         
         # Se o cartão foi aprovado, gerar a imagem personalizada
         if novo_status == 'aprovado':
@@ -973,7 +972,7 @@ def aprovar_saque(current_admin, saque_id):
             return jsonify({'message': 'Este saque não está pendente'}), 400
             
         saque.status = 'aprovado'
-        saque.data_processamento = datetime.datetime.now(datetime.UTC)
+        saque.data_processamento = datetime.datetime.now(datetime.timezone.utc)
         
         db.session.commit()
         
@@ -1003,7 +1002,7 @@ def recusar_saque(current_admin, saque_id):
             
         # Atualizar status do saque
         saque.status = 'recusado'
-        saque.data_processamento = datetime.datetime.now(datetime.UTC)
+        saque.data_processamento = datetime.datetime.now(datetime.timezone.utc)
         
         # Devolver o valor ao saldo do usuário
         usuario = Usuario.query.get(saque.user_id)
@@ -1042,7 +1041,7 @@ def admin_login():
             
         token = jwt.encode({
             'admin_id': admin.id,
-            'exp': datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
+            'exp': datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
         }, app.config['SECRET_KEY'])
         
         return jsonify({
@@ -1149,7 +1148,7 @@ def atualizar_usuario(current_admin, user_id):
                 user.data_expiracao_vip = None
             # Se mudar para algum plano VIP, adiciona 7 dias de validade
             elif data['role'].startswith('vip'):
-                user.data_expiracao_vip = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=7)
+                user.data_expiracao_vip = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=7)
 
         db.session.commit()
         return jsonify({'message': 'Usuário atualizado com sucesso'}), 200
