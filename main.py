@@ -82,6 +82,9 @@ class Usuario(db.Model):
     consultas_totais = db.Column(db.Integer, default=0)
     saldo = db.Column(db.Float, default=0.0)
     ganhos_hoje = db.Column(db.Float, default=0)
+    
+    # Relacionamento com investimentos
+    investimentos = db.relationship('Investimento', backref='usuario', lazy='dynamic')
 
 class CartaoCredito(db.Model):
     __tablename__ = 'cartao_credito'
@@ -123,6 +126,68 @@ class Admin(db.Model):
     username = db.Column(db.String(50), unique=True, nullable=False)
     password = db.Column(db.String(128), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.now(datetime.timezone.utc))
+
+# Modelo para investimentos
+class Investimento(db.Model):
+    __tablename__ = 'investimentos'
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)
+    ativo = db.Column(db.String(50), nullable=False)
+    valor = db.Column(db.Float, nullable=False)
+    prazo = db.Column(db.Integer, nullable=False)  # em meses
+    taxa = db.Column(db.Float, nullable=False)  # taxa mensal
+    data_inicio = db.Column(db.DateTime, default=datetime.datetime.now(datetime.timezone.utc))
+    data_vencimento = db.Column(db.DateTime, nullable=False)
+    valor_final_estimado = db.Column(db.Float, nullable=False)
+    status = db.Column(db.String(20), default='ativo')  # ativo, finalizado, cancelado
+
+# Configuração dos ativos disponíveis
+ativos_investimento = {
+    'votopay': {
+        'nome': 'ATIVO VOTOPAY',
+        'descricao': 'BancoSeguro',
+        'rentabilidade': '40% ao mês',
+        'taxa': 0.40,
+        'risco': 'Muito baixo',
+        'valor_minimo': 100,
+        'valor_maximo': 10000,
+        'vencimento': '30 dias',
+        'destaque': True
+    },
+    'premium': {
+        'nome': 'VOTOPAY PREMIUM',
+        'descricao': 'BancoSeguro',
+        'rentabilidade': '35% ao mês',
+        'taxa': 0.35,
+        'risco': 'Baixo',
+        'valor_minimo': 500,
+        'valor_maximo': 10000,
+        'vencimento': 'Sem Vencimento',
+        'destaque': True
+    },
+    'cdb-pagbank': {
+        'nome': 'CDB PagBank 107%',
+        'descricao': 'BancoSeguro',
+        'rentabilidade': '107% do CDI',
+        'taxa': 0.107 * 0.1275,  # Aproximação do CDI
+        'risco': 'Baixo',
+        'valor_minimo': 500,
+        'valor_maximo': 10000,
+        'vencimento': 'Sem Vencimento',
+        'destaque': True
+    },
+    'cdb-liquidez': {
+        'nome': 'CDB Liquidez Diária',
+        'descricao': 'BancoSeguro',
+        'rentabilidade': '103% do CDI',
+        'taxa': 0.103 * 0.1275,  # Aproximação do CDI
+        'risco': 'Muito baixo',
+        'valor_minimo': 1,
+        'valor_maximo': 10000,
+        'vencimento': 'Diário',
+        'destaque': True
+    }
+}
 
 # -----------------------------------------------------------------------------
 # Funções auxiliares
@@ -903,8 +968,8 @@ def solicitar_saque(current_user):
         if not chave_pix or valor <= 0:
             return jsonify({'message': 'Dados inválidos'}), 400
 
-        if valor > 10:
-            return jsonify({'message': 'Valor máximo para saque é R$ 10,00'}), 400
+        if valor > 100:
+            return jsonify({'message': 'Valor máximo para saque é R$ 100,00'}), 400
 
         if valor > current_user.saldo:
             return jsonify({'message': 'Saldo insuficiente'}), 400
@@ -1178,6 +1243,134 @@ def excluir_usuario(current_admin, user_id):
         db.session.rollback()
         print(f"Erro ao excluir usuário: {str(e)}")
         return jsonify({'message': 'Erro ao excluir usuário'}), 500
+
+# Rota para realizar investimento
+@app.route('/realizar-investimento', methods=['POST'])
+@token_requerido
+def realizar_investimento(current_user):
+    try:
+        data = request.json
+        ativo_id = data.get('ativo')
+        valor = float(data.get('valor', 0))
+        prazo = int(data.get('prazo', 1))
+        
+        # Verificar se o ativo existe
+        if ativo_id not in ativos_investimento:
+            return jsonify({'message': 'Ativo não encontrado'}), 404
+        
+        ativo = ativos_investimento[ativo_id]
+        
+        # Validar valor
+        if valor < ativo['valor_minimo'] or valor > ativo['valor_maximo']:
+            return jsonify({'message': f'Valor deve estar entre {ativo["valor_minimo"]} e {ativo["valor_maximo"]}'}), 400
+        
+        # Verificar se o usuário tem saldo suficiente
+        if valor > current_user.saldo:
+            return jsonify({'message': 'Saldo insuficiente'}), 400
+        
+        # Calcular data de vencimento
+        data_inicio = datetime.datetime.now(datetime.timezone.utc)
+        data_vencimento = data_inicio + datetime.timedelta(days=prazo * 30)
+        
+        # Calcular valor final estimado
+        valor_final = valor
+        for _ in range(prazo):
+            valor_final += valor_final * ativo['taxa']
+        
+        # Criar investimento
+        novo_investimento = Investimento(
+            user_id=current_user.id,
+            ativo=ativo_id,
+            valor=valor,
+            prazo=prazo,
+            taxa=ativo['taxa'],
+            data_inicio=data_inicio,
+            data_vencimento=data_vencimento,
+            valor_final_estimado=valor_final,
+            status='ativo'
+        )
+        
+        # Deduzir do saldo do usuário
+        current_user.saldo -= valor
+        
+        db.session.add(novo_investimento)
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Investimento realizado com sucesso',
+            'investimento': {
+                'id': novo_investimento.id,
+                'ativo': ativo['nome'],
+                'valor': valor,
+                'prazo': prazo,
+                'data_inicio': novo_investimento.data_inicio.isoformat(),
+                'data_vencimento': novo_investimento.data_vencimento.isoformat(),
+                'valor_final_estimado': valor_final
+            }
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao realizar investimento: {str(e)}")
+        return jsonify({'message': f'Erro ao realizar investimento: {str(e)}'}), 500
+
+# Rota para listar investimentos do usuário
+@app.route('/investimentos', methods=['GET'])
+@token_requerido
+def listar_investimentos(current_user):
+    try:
+        investimentos = Investimento.query.filter_by(user_id=current_user.id).all()
+        
+        resultado = []
+        for inv in investimentos:
+            ativo_info = ativos_investimento.get(inv.ativo, {})
+            resultado.append({
+                'id': inv.id,
+                'ativo': ativo_info.get('nome', inv.ativo),
+                'valor': inv.valor,
+                'prazo': inv.prazo,
+                'taxa': inv.taxa,
+                'data_inicio': inv.data_inicio.isoformat(),
+                'data_vencimento': inv.data_vencimento.isoformat(),
+                'valor_final_estimado': inv.valor_final_estimado,
+                'status': inv.status
+            })
+        
+        return jsonify(resultado), 200
+        
+    except Exception as e:
+        print(f"Erro ao listar investimentos: {str(e)}")
+        return jsonify({'message': f'Erro ao listar investimentos: {str(e)}'}), 500
+
+# Rota para obter detalhes de um investimento específico
+@app.route('/investimentos/<int:investimento_id>', methods=['GET'])
+@token_requerido
+def obter_investimento(current_user, investimento_id):
+    try:
+        investimento = Investimento.query.filter_by(id=investimento_id, user_id=current_user.id).first()
+        
+        if not investimento:
+            return jsonify({'message': 'Investimento não encontrado'}), 404
+        
+        ativo_info = ativos_investimento.get(investimento.ativo, {})
+        
+        return jsonify({
+            'id': investimento.id,
+            'ativo': ativo_info.get('nome', investimento.ativo),
+            'ativo_id': investimento.ativo,
+            'ativo_info': ativo_info,
+            'valor': investimento.valor,
+            'prazo': investimento.prazo,
+            'taxa': investimento.taxa,
+            'data_inicio': investimento.data_inicio.isoformat(),
+            'data_vencimento': investimento.data_vencimento.isoformat(),
+            'valor_final_estimado': investimento.valor_final_estimado,
+            'status': investimento.status
+        }), 200
+        
+    except Exception as e:
+        print(f"Erro ao obter investimento: {str(e)}")
+        return jsonify({'message': f'Erro ao obter investimento: {str(e)}'}), 500
 
 # -----------------------------------------------------------------------------
 # Iniciar a aplicação
